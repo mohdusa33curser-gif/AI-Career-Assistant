@@ -1,0 +1,1429 @@
+"""Business logic: settings, dataset pipeline, skill parsing, matching, analysis."""
+
+from __future__ import annotations
+
+import math
+import os
+import re
+import unicodedata
+from collections import Counter
+from dataclasses import dataclass, field
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Final, TypedDict
+
+import pandas as pd
+from pydantic import BaseModel, Field, field_validator
+
+from models import DatasetSummary, JobRecord
+from utils import clean_optional_text, split_pipe_values
+
+
+# --- constants (merged) ---
+
+ALLOWED_CATEGORIES: Final[frozenset[str]] = frozenset(
+    {
+        "Frontend",
+        "Backend",
+        "Full Stack",
+        "Data",
+        "AI",
+        "DevOps",
+        "Mobile",
+        "Cybersecurity",
+    }
+)
+
+SKILL_PRIORITY_WEIGHTS: Final[dict[str, int]] = {
+    "High": 3,
+    "Moderate": 2,
+    "Low": 1,
+}
+
+"""Default weight for user-supplied skills when no job-specific priority is known."""
+DEFAULT_USER_SKILL_WEIGHT: Final[int] = SKILL_PRIORITY_WEIGHTS["Moderate"]
+
+"""Canonical skill keys (see ``skill_normalization``) blocked from CV extraction."""
+SKILL_EXTRACTION_BLOCKLIST_LOWER: Final[frozenset[str]] = frozenset(
+    {
+        "technical documentation",
+    },
+)
+
+# --- config (merged) ---
+
+class Settings(BaseModel):
+    """Runtime configuration; override via environment variables."""
+
+    APP_NAME: str = Field(
+        default="Smart Career Analysis and Recommendation System",
+        description="Human-readable application name.",
+    )
+    APP_VERSION: str = Field(default="0.1.0", description="Semantic or project version string.")
+    DEBUG: bool = Field(default=False, description="Enable verbose debug behavior when true.")
+    DATASET_PATH: Path = Field(
+        default=Path("data/jobs.csv"),
+        description="Path to the jobs CSV file, relative to the backend root or absolute.",
+    )
+
+    @field_validator("DATASET_PATH", mode="before")
+    @classmethod
+    def _coerce_dataset_path(cls, value: str | Path) -> Path:
+        return Path(value) if not isinstance(value, Path) else value
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+_DEFAULT_APP_NAME = "Smart Career Analysis and Recommendation System"
+_DEFAULT_APP_VERSION = "0.1.0"
+_DEFAULT_DATASET = Path("data/jobs.csv")
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Return cached settings instance (singleton per process)."""
+    path_raw = os.getenv("DATASET_PATH")
+    return Settings(
+        APP_NAME=(os.getenv("APP_NAME") or _DEFAULT_APP_NAME).strip() or _DEFAULT_APP_NAME,
+        APP_VERSION=(os.getenv("APP_VERSION") or _DEFAULT_APP_VERSION).strip() or _DEFAULT_APP_VERSION,
+        DEBUG=_env_bool("DEBUG", False),
+        DATASET_PATH=Path(path_raw.strip()) if path_raw and path_raw.strip() else _DEFAULT_DATASET,
+    )
+
+# --- column_mapping (merged) ---
+
+REQUIRED_LOGICAL_COLUMNS: tuple[str, ...] = (
+    "Job Title",
+    "Category",
+    "Description",
+    "UI Description",
+    "Core Skills",
+    "Skill Priority Level",
+    "Soft Skills",
+    "Education",
+    "Experience",
+    "Salary Range",
+    "Job Trend",
+    "Final Skill Count",
+)
+
+COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
+    "Job Title": ("Job Title", "Title", "JobTitle", "Job_Title"),
+    "Category": ("Category", "Job Category", "Role Category"),
+    "Description": ("Description", "ML Description", "Job Description", "Full Description"),
+    "UI Description": ("UI Description", "Short Description", "Summary"),
+    "Core Skills": ("Core Skills", "CoreSkills", "Technical Skills", "Key Skills"),
+    "Skill Priority Level": (
+        "Skill Priority Level",
+        "Skill Priorities",
+        "Skills Priority",
+        "Priority Skills",
+    ),
+    "Soft Skills": ("Soft Skills", "SoftSkills", "Interpersonal Skills"),
+    "Education": ("Education", "Education Degree", "Degree", "Qualification"),
+    "Experience": ("Experience", "Years of Experience", "Exp"),
+    "Salary Range": ("Salary Range", "Salary", "Compensation"),
+    "Job Trend": ("Job Trend", "Trend", "Market Trend"),
+    "Final Skill Count": ("Final Skill Count", "Skill Count", "Total Skills"),
+}
+
+
+def _strip_lookup(columns: pd.Index) -> dict[str, str]:
+    """Map stripped header text to the exact column label in the frame."""
+    lookup: dict[str, str] = {}
+    for col in columns:
+        label = str(col)
+        stripped = label.strip()
+        if stripped not in lookup:
+            lookup[stripped] = label
+    return lookup
+
+
+def resolve_column_mapping(df: pd.DataFrame) -> dict[str, str]:
+    """
+    Map each logical column name to the actual ``DataFrame`` column label.
+
+    Tries aliases in order: exact match against ``df.columns``, then stripped
+    header match (first occurrence wins).
+
+    Returns:
+        ``{ logical_name: actual_csv_header }`` for every required logical field.
+
+    Raises:
+        ValueError: If any logical field cannot be resolved.
+    """
+    col_list = [str(c) for c in df.columns]
+    col_set = set(col_list)
+    strip_map = _strip_lookup(df.columns)
+
+    resolved: dict[str, str] = {}
+    missing: list[str] = []
+
+    for logical in REQUIRED_LOGICAL_COLUMNS:
+        candidates = COLUMN_ALIASES.get(logical, (logical,))
+        found: str | None = None
+        for candidate in candidates:
+            if candidate in col_set:
+                found = candidate
+                break
+            key = candidate.strip()
+            if key in strip_map:
+                found = strip_map[key]
+                break
+        if found is None:
+            missing.append(logical)
+        else:
+            resolved[logical] = found
+
+    if missing:
+        available = ", ".join(col_list[:40])
+        more = " …" if len(col_list) > 40 else ""
+        tried = "; ".join(
+            f"{m}: [{', '.join(COLUMN_ALIASES.get(m, (m,)))}]" for m in missing
+        )
+        raise ValueError(
+            f"Could not resolve required column(s): {', '.join(missing)}. "
+            f"Tried aliases: {tried}. "
+            f"Columns in file: {available}{more}"
+        )
+
+    return resolved
+
+# --- skill_normalization (merged) ---
+
+_PAREN: Final[re.Pattern[str]] = re.compile(r"\([^)]*\)")
+
+# Alias / surface form → canonical matching key (stable identifiers shared by CV + dataset).
+SKILL_CANONICAL_ALIAS_MAP: Final[dict[str, str]] = {
+    "cpp": "c++",
+    "c plus plus": "c++",
+    "c++": "c++",
+    "ml": "machine learning",
+    "ai": "artificial intelligence",
+    "js": "javascript",
+    "reactjs": "react",
+    "react.js": "react",
+    "react": "react",
+    "node": "node.js",
+    "nodejs": "node.js",
+    "node.js": "node.js",
+    "asp net": "asp.net",
+    "aspnet": "asp.net",
+    "asp.net": "asp.net",
+    "gcp": "google cloud",
+    "aws cloud": "aws",
+    "aws": "aws",
+    "amazon web services": "aws",
+    "javascript": "javascript",
+    "typescript": "typescript",
+    "machine learning": "machine learning",
+    "artificial intelligence": "artificial intelligence",
+    "nlp": "natural language processing",
+    "natural language processing": "natural language processing",
+    "py": "python",
+    "python3": "python",
+    "python": "python",
+    "sql": "sql",
+    "microsoft azure": "azure",
+    "azure": "azure",
+    "google cloud": "google cloud",
+    "postgres": "postgresql",
+    "postgresql": "postgresql",
+    "mongo": "mongodb",
+    "mongodb": "mongodb",
+    "golang": "go",
+    "go lang": "go",
+    "go": "go",
+    "tf": "tensorflow",
+    "tensorflow": "tensorflow",
+    "pytorch": "pytorch",
+    "k8s": "kubernetes",
+    "kubernetes": "kubernetes",
+    "angularjs": "angular",
+    "angular": "angular",
+    "vue": "vue.js",
+    "vuejs": "vue.js",
+    "vue.js": "vue.js",
+    "dotnet": ".net",
+    ".net": ".net",
+    "c#": "c#",
+    "csharp": "c#",
+    "java": "java",
+    "kotlin": "kotlin",
+    "swift": "swift",
+    "scala": "scala",
+    "rust": "rust",
+    "php": "php",
+    "ruby": "ruby",
+    "docker": "docker",
+    "git": "git",
+    "linux": "linux",
+    "html": "html",
+    "css": "css",
+    "sass": "sass",
+    "webpack": "webpack",
+    "redis": "redis",
+    "kafka": "kafka",
+    "spark": "spark",
+    "hadoop": "hadoop",
+    "microservices": "microservices",
+    "ci cd": "ci/cd",
+    "cicd": "ci/cd",
+    "ci/cd": "ci/cd",
+}
+
+_CANONICAL_DISPLAY: Final[dict[str, str]] = {
+    "c++": "C++",
+    "c#": "C#",
+    ".net": ".NET",
+    "node.js": "Node.js",
+    "asp.net": "ASP.NET",
+    "vue.js": "Vue.js",
+    "machine learning": "Machine Learning",
+    "artificial intelligence": "Artificial Intelligence",
+    "natural language processing": "Natural Language Processing",
+    "javascript": "JavaScript",
+    "typescript": "TypeScript",
+    "python": "Python",
+    "sql": "SQL",
+    "aws": "AWS",
+    "gcp": "GCP",
+    "azure": "Azure",
+    "google cloud": "GCP",
+    "postgresql": "PostgreSQL",
+    "mongodb": "MongoDB",
+    "tensorflow": "TensorFlow",
+    "pytorch": "PyTorch",
+    "kubernetes": "Kubernetes",
+    "docker": "Docker",
+    "git": "Git",
+    "linux": "Linux",
+    "html": "HTML",
+    "css": "CSS",
+    "react": "React",
+    "angular": "Angular",
+    "java": "Java",
+    "go": "Go",
+    "php": "PHP",
+    "ruby": "Ruby",
+    "scala": "Scala",
+    "swift": "Swift",
+    "kotlin": "Kotlin",
+    "rust": "Rust",
+    "kafka": "Kafka",
+    "redis": "Redis",
+    "spark": "Spark",
+    "hadoop": "Hadoop",
+    "webpack": "Webpack",
+    "sass": "Sass",
+    "microservices": "Microservices",
+    "ci/cd": "CI/CD",
+}
+
+
+def preprocess_skill_text(raw: str) -> str:
+    """
+    Lowercase, trim, collapse whitespace, normalize separators, strip parenthetical noise.
+
+    Preserves meaningful tokens (C++, C#, .NET, Node.js, Vue.js, ASP.NET) before
+    generic punctuation removal.
+    """
+    s = clean_optional_text(raw)
+    if not s:
+        return ""
+    while True:
+        n = _PAREN.sub("", s)
+        n = re.sub(r"\s+", " ", n).strip()
+        if n == s:
+            break
+        s = n
+    s = s.lower().strip()
+    s = re.sub(r"(?<=[a-z0-9])/(?=[a-z0-9])", " ", s)
+    s = s.replace("node.js", "\x01N\x01")
+    s = s.replace("vue.js", "\x01V\x01")
+    s = s.replace("asp.net", "\x01A\x01")
+    s = s.replace(".net", "\x01D\x01")
+    s = re.sub(r"(?<=[a-z0-9])\.(?=[a-z0-9])", "", s)
+    s = s.replace("\x01N\x01", "node.js")
+    s = s.replace("\x01V\x01", "vue.js")
+    s = s.replace("\x01A\x01", "asp.net")
+    s = s.replace("\x01D\x01", ".net")
+    s = re.sub(r"[-_]+", " ", s)
+    s = re.sub(r"[^a-z0-9\s+#.+]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def canonicalize_skill(raw: str) -> str:
+    """Return the canonical matching key for a skill string (dataset or résumé)."""
+    s = preprocess_skill_text(raw)
+    if not s:
+        return ""
+    for alias in sorted(SKILL_CANONICAL_ALIAS_MAP.keys(), key=len, reverse=True):
+        if s == alias:
+            return SKILL_CANONICAL_ALIAS_MAP[alias]
+    return s
+
+
+def normalize_skill_name(skill: str) -> str:
+    """Same as :func:`canonicalize_skill` (legacy name)."""
+    return canonicalize_skill(skill)
+
+
+def display_label_for_canonical(canon: str) -> str:
+    """Human-readable label for API/UI."""
+    if not canon:
+        return ""
+    if canon in _CANONICAL_DISPLAY:
+        return _CANONICAL_DISPLAY[canon]
+    if len(canon) <= 5 and "/" not in canon and canon.replace("-", "").isalpha():
+        return canon.upper()
+    parts = canon.replace("/", " / ").split()
+    return " ".join(p.capitalize() for p in parts)
+
+
+def aliases_for_canonical_key(canon: str) -> frozenset[str]:
+    """Lowercase search phrases for CV regex matching for a canonical key."""
+    ck = canon.strip().lower()
+    if not ck:
+        return frozenset()
+    out: set[str] = {ck}
+    for alias, target in SKILL_CANONICAL_ALIAS_MAP.items():
+        if target == ck:
+            out.add(alias.lower().strip())
+    if " " in ck:
+        out.add(ck.replace(" ", "-"))
+        out.add(ck.replace(" ", ""))
+    if "/" in ck:
+        out.add(ck.replace("/", " "))
+    return frozenset(p for p in out if p)
+
+
+def apply_skill_display_to_analysis_payload(payload: dict) -> dict:
+    """Map canonical skill keys in an analyze response dict to display labels."""
+    out = dict(payload)
+    skills = payload.get("skills")
+    if isinstance(skills, dict):
+        out["skills"] = {display_label_for_canonical(k): v for k, v in skills.items()}
+    gaps = payload.get("gaps")
+    if isinstance(gaps, list):
+        out["gaps"] = [{**row, "skill": display_label_for_canonical(str(row.get("skill", "")))} for row in gaps]
+    top_jobs = payload.get("top_jobs")
+    if isinstance(top_jobs, list):
+        out["top_jobs"] = [_display_top_job_row(j) for j in top_jobs]
+    return out
+
+
+def _display_top_job_row(job: dict) -> dict:
+    j = dict(job)
+    ps = job.get("parsed_skills")
+    if isinstance(ps, dict):
+        j["parsed_skills"] = {display_label_for_canonical(k): v for k, v in ps.items()}
+    ga = job.get("gap_analysis")
+    if isinstance(ga, dict):
+
+        def rows(xs: list) -> list:
+            return [{**e, "skill": display_label_for_canonical(str(e.get("skill", "")))} for e in xs]
+
+        j["gap_analysis"] = {
+            "strong": rows(ga.get("strong", [])),
+            "partial": rows(ga.get("partial", [])),
+            "missing": rows(ga.get("missing", [])),
+        }
+    return j
+
+
+skill_alias_map = SKILL_CANONICAL_ALIAS_MAP
+
+# --- skill_parser (merged) ---
+
+def priority_label_to_weight(label: str) -> int:
+    """
+    Map a priority label to its numeric weight.
+
+    Raises:
+        ValueError: If the label is empty or not one of High, Moderate, Low
+            (case-insensitive).
+    """
+    raw = clean_optional_text(label)
+    if not raw:
+        raise ValueError("Empty priority label")
+    normalized = raw.strip().lower()
+    for name, weight in SKILL_PRIORITY_WEIGHTS.items():
+        if name.lower() == normalized:
+            return weight
+    raise ValueError(f"Unknown priority label: {label!r}")
+
+
+def parse_skill_priority_pairs(raw_value: str) -> dict[str, int]:
+    """
+    Parse strings like ``Python:High|SQL:High|React:Moderate`` into a skill→weight map.
+
+    Malformed segments are skipped. Duplicate skills keep the highest weight.
+    Keys are :func:`~services.skill_normalization.canonicalize_skill` values so they
+    align with CV-extracted skills.
+    """
+    text = clean_optional_text(raw_value)
+    if not text:
+        return {}
+
+    result: dict[str, int] = {}
+    for chunk in split_pipe_values(text):
+        if ":" not in chunk:
+            continue
+        skill_part, priority_part = chunk.split(":", 1)
+        skill_name = canonicalize_skill(skill_part)
+        if not skill_name:
+            continue
+        try:
+            weight = priority_label_to_weight(priority_part)
+        except ValueError:
+            continue
+        prev = result.get(skill_name)
+        if prev is None or weight > prev:
+            result[skill_name] = weight
+    return result
+
+
+def extract_skill_names(parsed_skills: dict[str, int]) -> list[str]:
+    """Return sorted unique skill names for stable downstream use."""
+    return sorted(parsed_skills.keys())
+
+# --- dataset_validator (merged) ---
+
+class DatasetValidationError(RuntimeError):
+    """Raised when the dataset cannot be safely loaded or fails structural checks."""
+
+
+@dataclass
+class ValidationResult:
+    """Outcome of validation: the frame plus non-fatal warnings and column resolution."""
+
+    dataframe: pd.DataFrame
+    column_map: dict[str, str]
+    warnings: list[str] = field(default_factory=list)
+
+
+def _ensure_file_exists(path: Path) -> None:
+    if not path.exists():
+        raise DatasetValidationError(f"Dataset file does not exist: {path}")
+    if not path.is_file():
+        raise DatasetValidationError(f"Dataset path is not a file: {path}")
+
+
+def _final_skill_count_coercible(value: object) -> bool:
+    text = clean_optional_text(value)
+    if not text:
+        return True
+    try:
+        float(text.replace(",", ""))
+    except ValueError:
+        return False
+    return True
+
+
+def validate_jobs_dataset(path: Path) -> ValidationResult:
+    """
+    Validate dataset presence, resolvable columns, and soft row-level rules.
+
+    Fatal problems raise ``DatasetValidationError``. Recoverable row issues
+    are appended to ``warnings`` and processing may continue.
+    """
+    _ensure_file_exists(path)
+    warnings: list[str] = []
+
+    try:
+        df = pd.read_csv(path, dtype=str, keep_default_na=True)
+    except Exception as exc:  # pragma: no cover - pandas IO errors
+        raise DatasetValidationError(f"Failed to read CSV: {exc}") from exc
+
+    if df.empty:
+        raise DatasetValidationError("Dataset is empty (no rows).")
+
+    try:
+        column_map = resolve_column_mapping(df)
+    except ValueError as exc:
+        raise DatasetValidationError(str(exc)) from exc
+
+    col = column_map
+
+    for idx, row in df.iterrows():
+        row_num = int(idx) + 2
+        category = clean_optional_text(row.get(col["Category"], ""))
+        if category and category not in ALLOWED_CATEGORIES:
+            warnings.append(
+                f"Row {row_num}: category {category!r} is not in the allowed set."
+            )
+
+        sp_raw = clean_optional_text(row.get(col["Skill Priority Level"], ""))
+        if sp_raw:
+            parsed = parse_skill_priority_pairs(sp_raw)
+            if not parsed:
+                warnings.append(
+                    f"Row {row_num}: skill priority field is present but produced no parseable skill:weight pairs."
+                )
+
+        fsc = row.get(col["Final Skill Count"])
+        if not _final_skill_count_coercible(fsc):
+            warnings.append(
+                f"Row {row_num}: final skill count value {fsc!r} is not numeric."
+            )
+
+    return ValidationResult(dataframe=df, column_map=column_map, warnings=warnings)
+
+
+def required_logical_columns() -> tuple[str, ...]:
+    """Public list of canonical column keys expected after resolution."""
+    return REQUIRED_LOGICAL_COLUMNS
+
+# --- data_loader (merged) ---
+
+class JobDatasetService:
+    """Loads and caches ``JobRecord`` instances built from the validated CSV."""
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+        self._jobs: list[JobRecord] | None = None
+        self._summary: DatasetSummary | None = None
+        self._resolved_dataset_path: Path | None = None
+        self._validation_warnings: list[str] = []
+        self._column_map: dict[str, str] | None = None
+
+    def _backend_root(self) -> Path:
+        return Path(__file__).resolve().parent
+
+    def _resolve_dataset_path(self) -> Path:
+        configured = self._settings.DATASET_PATH
+        if configured.is_absolute():
+            return configured.resolve()
+        return (self._backend_root() / configured).resolve()
+
+    def is_loaded(self) -> bool:
+        """Return True after ``load_dataset`` has completed successfully."""
+        return self._jobs is not None
+
+    @property
+    def resolved_dataset_path(self) -> Path | None:
+        """Absolute path used for the last successful or attempted load."""
+        return self._resolved_dataset_path
+
+    @property
+    def column_map(self) -> dict[str, str] | None:
+        """Logical column name → actual CSV header from the last successful load."""
+        return self._column_map
+
+    def load_dataset(self) -> list[JobRecord]:
+        """
+        Read CSV from disk, validate, parse rows into ``JobRecord``, and cache.
+
+        Returns:
+            The list of processed job records.
+
+        Raises:
+            DatasetValidationError: If structural validation fails.
+        """
+        path = self._resolve_dataset_path()
+        self._resolved_dataset_path = path
+
+        validation = validate_jobs_dataset(path)
+        self._validation_warnings = list(validation.warnings)
+        self._column_map = dict(validation.column_map)
+        df = validation.dataframe
+        col = validation.column_map
+
+        jobs: list[JobRecord] = []
+        for row_index, (_, row) in enumerate(df.iterrows()):
+            sp_raw = clean_optional_text(row.get(col["Skill Priority Level"], ""))
+            parsed = parse_skill_priority_pairs(sp_raw)
+
+            soft_cell = clean_optional_text(row.get(col["Soft Skills"], ""))
+            soft_list = split_pipe_values(soft_cell) if soft_cell else []
+
+            fsc_raw = clean_optional_text(row.get(col["Final Skill Count"], ""))
+            final_count: int | None
+            if not fsc_raw:
+                final_count = None
+            else:
+                try:
+                    final_count = int(float(fsc_raw.replace(",", "")))
+                except ValueError:
+                    final_count = None
+
+            record = JobRecord(
+                job_title=clean_optional_text(row.get(col["Job Title"], "")),
+                category=clean_optional_text(row.get(col["Category"], "")),
+                description=clean_optional_text(row.get(col["Description"], "")),
+                ui_description=clean_optional_text(row.get(col["UI Description"], "")),
+                core_skills_raw=clean_optional_text(row.get(col["Core Skills"], "")),
+                skill_priority_raw=sp_raw,
+                parsed_skills=parsed,
+                soft_skills=soft_list,
+                education=clean_optional_text(row.get(col["Education"], "")),
+                experience=clean_optional_text(row.get(col["Experience"], "")),
+                salary_range=clean_optional_text(row.get(col["Salary Range"], "")),
+                job_trend=clean_optional_text(row.get(col["Job Trend"], "")),
+                final_skill_count=final_count,
+                source_row_index=row_index,
+            )
+            jobs.append(record)
+
+        self._jobs = jobs
+        self._summary = self._compute_summary(path)
+        return jobs
+
+    def _compute_summary(self, path: Path) -> DatasetSummary:
+        assert self._jobs is not None
+        jobs = self._jobs
+        total = len(jobs)
+        category_distribution = dict(Counter(j.category for j in jobs if j.category))
+        all_skills: set[str] = set()
+        skill_counts: list[int] = []
+        for job in jobs:
+            all_skills.update(job.parsed_skills.keys())
+            skill_counts.append(len(job.parsed_skills))
+        avg_skills = sum(skill_counts) / total if total else 0.0
+        return DatasetSummary(
+            total_jobs=total,
+            category_distribution=category_distribution,
+            unique_skill_count=len(all_skills),
+            average_skill_count=round(avg_skills, 4),
+            warnings_count=len(self._validation_warnings),
+            dataset_path=path,
+            validation_warnings=list(self._validation_warnings),
+        )
+
+    def get_all_jobs(self) -> list[JobRecord]:
+        """Return every cached job record (copy of the list container)."""
+        if self._jobs is None:
+            raise RuntimeError("Dataset has not been loaded yet.")
+        return list(self._jobs)
+
+    def get_dataset_summary(self) -> DatasetSummary:
+        """Return aggregate statistics for the loaded dataset."""
+        if self._summary is None:
+            raise RuntimeError("Dataset has not been loaded yet.")
+        return self._summary
+
+    def get_job_previews(self, limit: int = 5) -> list[JobRecord]:
+        """Return up to ``limit`` jobs from the start of the cached list."""
+        if self._jobs is None:
+            raise RuntimeError("Dataset has not been loaded yet.")
+        cap = max(0, min(limit, len(self._jobs)))
+        return list(self._jobs[:cap])
+
+# --- gap_analyzer (merged) ---
+
+class SkillGapEntry(TypedDict):
+    """One skill in a gap report with job-side importance and optional user weight."""
+
+    skill: str
+    job_weight: int
+    user_weight: int
+
+
+def analyze_skill_gap(
+    user_skills: dict[str, int],
+    job_skills: dict[str, int],
+) -> dict[str, list[SkillGapEntry]]:
+    """
+    Classify each job-required skill relative to the user vector.
+
+    - **strong**: user weight >= job weight (meets or exceeds requirement).
+    - **partial**: user has the skill but below required weight.
+    - **missing**: user weight is zero.
+
+    Args:
+        user_skills: Canonical user sparse vector (non-negative ints).
+        job_skills: Canonical job sparse vector.
+
+    Returns:
+        ``{"strong": [...], "partial": [...], "missing": [...]}`` lists sorted by
+        ``job_weight`` descending, then skill name.
+    """
+    strong: list[SkillGapEntry] = []
+    partial: list[SkillGapEntry] = []
+    missing: list[SkillGapEntry] = []
+
+    for skill in sorted(job_skills.keys()):
+        job_w = job_skills[skill]
+        if job_w <= 0:
+            continue
+        user_w = user_skills.get(skill, 0)
+        entry: SkillGapEntry = {
+            "skill": skill,
+            "job_weight": job_w,
+            "user_weight": user_w,
+        }
+        if user_w <= 0:
+            missing.append(entry)
+        elif user_w >= job_w:
+            strong.append(entry)
+        else:
+            partial.append(entry)
+
+    def sort_key(e: SkillGapEntry) -> tuple[int, str]:
+        return (-e["job_weight"], e["skill"])
+
+    strong.sort(key=sort_key)
+    partial.sort(key=sort_key)
+    missing.sort(key=sort_key)
+
+    return {"strong": strong, "partial": partial, "missing": missing}
+
+
+def gap_summary_to_serializable(gap: dict[str, list[SkillGapEntry]]) -> dict[str, list[dict[str, Any]]]:
+    """Return a plain dict copy suitable for JSON responses."""
+    return {
+        "strong": [dict(x) for x in gap["strong"]],
+        "partial": [dict(x) for x in gap["partial"]],
+        "missing": [dict(x) for x in gap["missing"]],
+    }
+
+# --- matcher (merged) ---
+
+def calculate_match_score(user_skills: dict[str, int], job_skills: dict[str, int]) -> float:
+    """
+    Weighted match percentage: overlap strength relative to the job requirement vector.
+
+    ``matched_weight = sum_k min(user[k], job[k])`` over skills present in the job.
+    ``total_job_weight = sum_k job[k]``.
+
+    Returns:
+        Score in ``[0, 100]``. ``0`` if the job defines no positive weights.
+    """
+    if not job_skills:
+        return 0.0
+
+    total_job_weight = sum(job_skills.values())
+    if total_job_weight <= 0:
+        return 0.0
+
+    matched_weight = 0
+    for skill, job_w in job_skills.items():
+        if job_w <= 0:
+            continue
+        user_w = user_skills.get(skill, 0)
+        if user_w > 0:
+            matched_weight += min(user_w, job_w)
+
+    ratio = matched_weight / total_job_weight
+    return round(max(0.0, min(100.0, ratio * 100.0)), 4)
+
+
+def sparse_cosine_similarity(a: dict[str, int], b: dict[str, int]) -> float:
+    """
+    Cosine similarity between two sparse non-negative integer skill vectors.
+
+    Used to suggest roles with similar skill *patterns* (vector similarity), separate
+
+    Returns:
+        Value in ``[0, 1]``, or ``0`` if either vector has zero L2 norm.
+    """
+    if not a or not b:
+        return 0.0
+
+    dot = 0.0
+    for key, av in a.items():
+        bv = b.get(key)
+        if bv is not None:
+            dot += av * bv
+
+    norm_a = math.sqrt(sum(v * v for v in a.values()))
+    norm_b = math.sqrt(sum(v * v for v in b.values()))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+
+    sim = dot / (norm_a * norm_b)
+    return round(max(0.0, min(1.0, sim)), 6)
+
+# --- vectorizer (merged) ---
+
+def build_skill_vector(skill_dict: dict[str, int]) -> dict[str, int]:
+    """
+    Build a sparse skill vector: canonical skill names, positive integer weights.
+
+    - Keys are normalized through the same synonym map as job parsing.
+    - Duplicate canonical skills keep the **maximum** weight.
+    - Non-positive weights are dropped.
+
+    Args:
+        skill_dict: Raw skill name → weight mapping (e.g. from CSV or user input).
+
+    Returns:
+        Canonical sparse vector suitable for matching and similarity.
+    """
+    result: dict[str, int] = {}
+    for raw_name, weight in skill_dict.items():
+        if weight <= 0:
+            continue
+        key = normalize_skill_name(str(raw_name))
+        if not key:
+            continue
+        prev = result.get(key)
+        if prev is None or weight > prev:
+            result[key] = weight
+    return result
+
+# --- scorer (merged) ---
+
+def calculate_career_score(match_scores: list[float]) -> float:
+    """
+    Career readiness score from the best alignment signals.
+
+    Uses the top five match percentages (or fewer if less data), averages them,
+    and clamps to ``[0, 100]``.
+
+    Args:
+        match_scores: Match percentages (0–100) in any order.
+
+    Returns:
+        Single readiness score in ``[0, 100]``.
+    """
+    if not match_scores:
+        return 0.0
+
+    top = sorted(match_scores, reverse=True)[:5]
+    avg = sum(top) / len(top)
+    return round(max(0.0, min(100.0, avg)), 4)
+
+# --- recommender (merged) ---
+
+@dataclass(frozen=True)
+class ScoredJob:
+    """Job with precomputed vectors, match score, and gap analysis."""
+
+    job: JobRecord
+    user_vector: dict[str, int]
+    job_vector: dict[str, int]
+    match_percent: float
+    gap: dict[str, list[SkillGapEntry]]
+
+
+def score_jobs_against_user(
+    jobs: list[JobRecord],
+    user_skills: dict[str, int],
+) -> list[ScoredJob]:
+    """
+    Build canonical vectors and attach match percentage plus gap analysis per job.
+    """
+    user_vector = build_skill_vector(user_skills)
+    scored: list[ScoredJob] = []
+    for job in jobs:
+        job_vector = build_skill_vector(job.parsed_skills)
+        match_pct = calculate_match_score(user_vector, job_vector)
+        gap = analyze_skill_gap(user_vector, job_vector)
+        scored.append(
+            ScoredJob(
+                job=job,
+                user_vector=user_vector,
+                job_vector=job_vector,
+                match_percent=match_pct,
+                gap=gap,
+            ),
+        )
+    return scored
+
+
+def select_top_matches(scored: list[ScoredJob], limit: int = 5) -> list[ScoredJob]:
+    """Return the highest ``match_percent`` rows (stable tie-break by title)."""
+    if limit <= 0:
+        return []
+    ordered = sorted(
+        scored,
+        key=lambda s: (-s.match_percent, s.job.job_title, s.job.source_row_index),
+    )
+    return ordered[:limit]
+
+
+def get_top_jobs(
+    jobs: list[JobRecord],
+    user_skills: dict[str, int],
+    *,
+    limit: int = 5,
+) -> list[ScoredJob]:
+    """
+    Score every job against the user vector and return the best matches.
+
+    Prefer :func:`score_jobs_against_user` plus :func:`select_top_matches` when you
+    already have a scored list (e.g. for alternative-job suggestions).
+    """
+    scored = score_jobs_against_user(jobs, user_skills)
+    return select_top_matches(scored, limit)
+
+
+def get_missing_skills_recommendation(top_jobs: list[ScoredJob]) -> list[dict[str, str | int]]:
+    """
+    Aggregate missing skills from top matches, ranked by job importance (weight).
+
+    Deduplicates by skill name keeping the highest ``job_weight`` seen.
+    """
+    best_weight: dict[str, int] = {}
+    for sj in top_jobs:
+        for entry in sj.gap["missing"]:
+            skill = entry["skill"]
+            jw = entry["job_weight"]
+            prev = best_weight.get(skill)
+            if prev is None or jw > prev:
+                best_weight[skill] = jw
+
+    ranked = sorted(best_weight.items(), key=lambda x: (-x[1], x[0]))
+    out: list[dict[str, str | int]] = []
+    for skill, weight in ranked[:12]:
+        label = display_label_for_canonical(skill)
+        out.append(
+            {
+                "skill": label,
+                "job_weight": weight,
+                "message": f"Add or strengthen “{label}” (importance weight {weight} in target roles).",
+            },
+        )
+    return out
+
+
+def rank_alternative_jobs(
+    scored: list[ScoredJob],
+    top_jobs: list[ScoredJob],
+    limit: int = 3,
+) -> list[dict[str, str | float]]:
+    """
+    Suggest roles with similar skill *shape* (cosine) that are not in the top list.
+
+    Excludes jobs already in ``top_jobs`` and sorts remaining by cosine similarity
+    to the user vector, descending.
+    """
+    if limit <= 0 or not scored:
+        return []
+
+    top_ids = {sj.job.source_row_index for sj in top_jobs}
+    if not scored:
+        return []
+
+    user_vec = scored[0].user_vector
+
+    candidates: list[tuple[ScoredJob, float]] = []
+    for sj in scored:
+        if sj.job.source_row_index in top_ids:
+            continue
+        cos = sparse_cosine_similarity(user_vec, sj.job_vector)
+        candidates.append((sj, cos))
+
+    candidates.sort(
+        key=lambda t: (-t[1], -t[0].match_percent, t[0].job.job_title),
+    )
+
+    alts: list[dict[str, str | float]] = []
+    for sj, cos in candidates[:limit]:
+        alts.append(
+            {
+                "job_title": sj.job.job_title,
+                "category": sj.job.category,
+                "similarity": cos,
+                "match_percent": sj.match_percent,
+                "message": (
+                    f"Similar skill pattern (cosine {cos:.2f}) with "
+                    f"{sj.match_percent:.1f}% weighted coverage—consider as a related path."
+                ),
+            },
+        )
+    return alts
+
+
+def get_alternative_jobs(
+    jobs: list[JobRecord],
+    user_skills: dict[str, int],
+    *,
+    top_limit: int = 5,
+    limit: int = 3,
+) -> list[dict[str, str | float]]:
+    """
+    Score all jobs, hold back the current top matches, and return cosine-similar alternates.
+
+    When a scored list is already available, call :func:`rank_alternative_jobs` instead
+    to avoid duplicate work.
+    """
+    scored = score_jobs_against_user(jobs, user_skills)
+    top = select_top_matches(scored, top_limit)
+    return rank_alternative_jobs(scored, top, limit)
+
+
+def build_text_recommendations(
+    missing_recs: list[dict[str, str | int]],
+    career_score: float,
+) -> list[dict[str, str | float]]:
+    """
+    Short actionable bullets combining readiness and missing-skill focus.
+    """
+    recs: list[dict[str, str | float]] = []
+
+    if career_score >= 75:
+        recs.append(
+            {
+                "title": "Strong alignment",
+                "description": "Your profile lines up well with several roles; refine niche skills to stand out.",
+                "priority": 1.0,
+            },
+        )
+    elif career_score >= 45:
+        recs.append(
+            {
+                "title": "Solid base",
+                "description": "Close priority gaps below to unlock higher match tiers.",
+                "priority": 1.0,
+            },
+        )
+    else:
+        recs.append(
+            {
+                "title": "Build core coverage",
+                "description": "Focus on high-weight missing skills from your best-matching roles first.",
+                "priority": 1.0,
+            },
+        )
+
+    for i, item in enumerate(missing_recs[:3], start=2):
+        recs.append(
+            {
+                "title": f"Target: {item['skill']}",
+                "description": str(item["message"]),
+                "priority": float(i),
+            },
+        )
+
+    return recs
+
+# --- text_cleaner (merged) ---
+
+def clean_cv_text(raw: str) -> str:
+    """
+    Produce human-readable plain text: collapse whitespace, trim, strip control chars.
+
+    Preserves word boundaries and typical punctuation inside sentences.
+    """
+    if not raw:
+        return ""
+    text = raw.replace("\x00", " ")
+    text = re.sub(r"[\r\t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    return text.strip()
+
+
+def normalize_for_skill_matching(text: str) -> str:
+    """
+    Return text suitable for regex skill scans (case-insensitive patterns use the original).
+
+    Collapses whitespace so multi-word skills match reliably.
+    """
+    cleaned = clean_cv_text(text)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def normalize_cv_text_for_skill_extraction(raw: str) -> str:
+    """
+    Normalize PDF/CV text for vocabulary skill extraction.
+
+    - Unicode NFKC (compatibility composition)
+    - Strip zero-width / BOM characters that break token boundaries
+    - Replace common separators with spaces (keeps ``+``, ``#``, ``/`` inside tech tokens)
+    - Lowercase for stable case-insensitive matching without per-pattern flags
+    - Collapse whitespace
+    """
+    if not raw:
+        return ""
+    text = unicodedata.normalize("NFKC", raw)
+    text = text.replace("\x00", " ")
+    text = re.sub(r"[\u200b-\u200f\u202f\u2060\ufeff]", "", text)
+    text = re.sub(r"[\r\t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    # "CI/CD" → tokens without breaking URLs (no ://)
+    text = re.sub(r"(?<=[A-Za-z0-9])/(?=[A-Za-z0-9])", " ", text)
+    # Separate glued enumerations: "Python,SQL" / "Python|SQL" → spaces
+    text = re.sub(r"[,;|•·](?=\S)", " ", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip().lower()
+
+# --- cv_parser (merged) ---
+
+def extract_text_from_pdf_bytes(data: bytes) -> str:
+    """
+    Read every page and concatenate text in document order.
+
+    Raises:
+        ValueError: If the bytes are not a readable PDF or extraction fails.
+    """
+    if not data:
+        raise ValueError("Empty file.")
+    if not data.startswith(b"%PDF"):
+        raise ValueError("File does not look like a PDF (missing %PDF header).")
+
+    try:
+        import fitz  # PyMuPDF
+    except ImportError as exc:  # pragma: no cover
+        raise ValueError("PyMuPDF is not installed.") from exc
+
+    try:
+        doc = fitz.open(stream=data, filetype="pdf")
+    except Exception as exc:
+        raise ValueError(f"Could not open PDF: {exc}") from exc
+
+    try:
+        parts: list[str] = []
+        for page_index in range(doc.page_count):
+            page = doc.load_page(page_index)
+            try:
+                # sort=True improves reading order on multi-column / complex layouts
+                parts.append(page.get_text("text", sort=True) or "")
+            except Exception:
+                try:
+                    parts.append(page.get_text("text") or "")
+                except Exception:
+                    parts.append("")
+        return "\n".join(parts)
+    finally:
+        doc.close()
+
+# --- skill_extractor (merged) ---
+
+def collect_canonical_vocabulary(jobs: list[JobRecord]) -> frozenset[str]:
+    """All unique normalized skill names appearing in loaded job records."""
+    skills: set[str] = set()
+    for job in jobs:
+        skills.update(job.parsed_skills.keys())
+    return frozenset(skills)
+
+
+def vocabulary_for_cv_extraction(jobs: list[JobRecord]) -> frozenset[str]:
+    """Dataset skill keys used when scanning CVs (drops extraction blocklist noise)."""
+    return frozenset(s for s in collect_canonical_vocabulary(jobs) if s not in SKILL_EXTRACTION_BLOCKLIST_LOWER)
+
+
+def build_global_skill_vocabulary(jobs: list[JobRecord]) -> frozenset[str]:
+    """Alias: full dataset skill lexicon from ``parsed_skills`` keys (lowercased matching elsewhere)."""
+    return collect_canonical_vocabulary(jobs)
+
+
+def _phrases_for_canonical(canonical: str) -> set[str]:
+    """Search phrases (lowercased) that should map to this canonical skill key."""
+    return set(aliases_for_canonical_key(canonical))
+
+
+def _build_ordered_phrases(vocabulary: frozenset[str]) -> list[tuple[str, str]]:
+    """(phrase, canonical) sorted longest-first for greedy overlap resolution."""
+    pairs: list[tuple[str, str]] = []
+    for canon in vocabulary:
+        for phrase in _phrases_for_canonical(canon):
+            pl = phrase.lower()
+            if len(pl) < 1:
+                continue
+            pairs.append((pl, canon))
+    pairs.sort(key=lambda x: (-len(x[0]), x[0], x[1]))
+    return pairs
+
+
+@lru_cache(maxsize=8192)
+def _compiled_phrase_pattern(phrase_lower: str) -> re.Pattern[str]:
+    """
+    Word-boundary-safe pattern; supports multi-word phrases and hyphen/space runs.
+
+    Scan text is lowercased ASCII-oriented; boundaries avoid stealing letters from neighbors.
+    """
+    parts = phrase_lower.split()
+    if len(parts) == 1:
+        core = re.escape(parts[0])
+    else:
+        core = r"[\s\-]+".join(re.escape(p) for p in parts)
+    return re.compile(
+        r"(?<![A-Za-z0-9+#])" + core + r"(?![A-Za-z0-9+#])",
+    )
+
+
+def extract_skills_from_cv_text(text: str, jobs: list[JobRecord]) -> list[str]:
+    """
+    Find vocabulary skills present in CV text.
+
+    Uses longest-match-first overlap resolution so shorter tokens (e.g. Java)
+    do not steal spans from longer ones (e.g. JavaScript). Phrases include exact
+    dataset names, lowercase forms, and synonym/alias expansions from constants.
+
+    Generic low-signal skills (blocklist) are removed after matching.
+    """
+    vocabulary = vocabulary_for_cv_extraction(jobs)
+    if not vocabulary:
+        return []
+
+    normalized = normalize_cv_text_for_skill_extraction(text)
+    if not normalized.strip():
+        return []
+
+    pairs = _build_ordered_phrases(vocabulary)
+    raw_hits: list[tuple[int, int, str]] = []
+
+    for phrase_lower, canon in pairs:
+        rx = _compiled_phrase_pattern(phrase_lower)
+        for m in rx.finditer(normalized):
+            raw_hits.append((m.start(), m.end(), canon))
+
+    raw_hits.sort(key=lambda x: -(x[1] - x[0]))
+    used: list[tuple[int, int]] = []
+    found: set[str] = set()
+    for start, end, canon in raw_hits:
+        if any(not (end <= s or start >= e) for s, e in used):
+            continue
+        used.append((start, end))
+        found.add(canon)
+
+    return sorted(found)
+
+
+def vocabulary_sample_for_debug(vocabulary: frozenset[str], limit: int = 80) -> list[str]:
+    """Sorted slice of canonical skills for debug endpoints."""
+    return sorted(vocabulary)[:limit]
+
+# --- analyze_service (merged) ---
+
+def skill_labels_to_weight_map(
+    labels: list[str],
+    default_weight: int = DEFAULT_USER_SKILL_WEIGHT,
+) -> dict[str, int]:
+    """
+    Convert API skill labels to a weight map with synonym normalization.
+
+    Duplicate labels merge by **maximum** weight (all equal to ``default_weight`` here).
+    Empty or invalid tokens are skipped.
+    """
+    out: dict[str, int] = {}
+    for label in labels:
+        cleaned = clean_optional_text(label)
+        if not cleaned:
+            continue
+        key = normalize_skill_name(cleaned)
+        if not key:
+            continue
+        prev = out.get(key, 0)
+        out[key] = max(prev, default_weight)
+    return out
+
+
+def _aggregate_gaps(top_jobs: list[ScoredJob]) -> list[dict[str, Any]]:
+    """
+    Merge missing/partial gaps across top roles for a compact API surface.
+
+    If a skill is **missing** in any top match, the aggregate status is missing.
+    Otherwise it is partial. ``job_weight`` is the maximum requirement weight seen;
+    ``user_weight`` is the minimum observed user weight among partial rows (0 if missing).
+    """
+    by_skill: dict[str, dict[str, Any]] = {}
+
+    def feed(entries: list[SkillGapEntry], status: str) -> None:
+        for entry in entries:
+            skill = entry["skill"]
+            jw = entry["job_weight"]
+            uw = entry["user_weight"]
+            row = by_skill.get(skill)
+            if row is None:
+                by_skill[skill] = {
+                    "skill": skill,
+                    "status": status,
+                    "job_weight": jw,
+                    "user_weight": uw if status == "partial" else 0,
+                }
+                continue
+            if status == "missing":
+                row["status"] = "missing"
+                row["job_weight"] = max(int(row["job_weight"]), jw)
+                row["user_weight"] = 0
+            else:
+                if row["status"] == "missing":
+                    row["job_weight"] = max(int(row["job_weight"]), jw)
+                else:
+                    row["job_weight"] = max(int(row["job_weight"]), jw)
+                    row["user_weight"] = min(int(row["user_weight"]), uw)
+
+    for sj in top_jobs:
+        feed(sj.gap["missing"], "missing")
+    for sj in top_jobs:
+        feed(sj.gap["partial"], "partial")
+
+    rank = {"missing": 2, "partial": 1}
+    ordered = sorted(
+        by_skill.values(),
+        key=lambda x: (-rank[str(x["status"])], -int(x["job_weight"]), str(x["skill"])),
+    )
+    return ordered
+
+
+def _top_job_payload(sj: ScoredJob) -> dict[str, Any]:
+    return {
+        "job_title": sj.job.job_title,
+        "category": sj.job.category,
+        "match_percent": sj.match_percent,
+        "parsed_skills": dict(sj.job.parsed_skills),
+        "gap_analysis": gap_summary_to_serializable(sj.gap),
+        "source_row_index": sj.job.source_row_index,
+        "final_skill_count": sj.job.final_skill_count,
+    }
+
+
+def analyze_cv_skills(
+    user_skills: dict[str, int],
+    jobs: list[JobRecord],
+    *,
+    top_k: int = 10,
+) -> dict[str, Any]:
+    """
+    Compare user skills against all loaded jobs and produce ranked insights.
+
+    When the user vector is empty, returns empty ``top_jobs``, ``gaps``, and
+    ``recommendations`` with ``career_score`` 0 (no placeholder job rankings).
+    """
+    user_vector = build_skill_vector(user_skills)
+
+    if not jobs:
+        return {
+            "skills": user_vector,
+            "top_jobs": [],
+            "gaps": [],
+            "recommendations": [],
+            "career_score": 0.0,
+        }
+
+    if not user_vector:
+        return {
+            "skills": {},
+            "top_jobs": [],
+            "gaps": [],
+            "recommendations": [],
+            "career_score": 0.0,
+        }
+
+    scored = score_jobs_against_user(jobs, user_skills)
+    top = select_top_matches(scored, top_k)
+    match_scores = [sj.match_percent for sj in top]
+    career_score = calculate_career_score(match_scores)
+
+    missing_recs = get_missing_skills_recommendation(top)
+    recommendations = build_text_recommendations(missing_recs, career_score)
+
+    alternatives = rank_alternative_jobs(scored, top, 3)
+    for i, alt in enumerate(alternatives):
+        recommendations.append(
+            {
+                "title": f"Related path: {alt['job_title']}",
+                "description": str(alt["message"]),
+                "priority": 4.0 + i * 0.1,
+            },
+        )
+
+    return {
+        "skills": user_vector,
+        "top_jobs": [_top_job_payload(sj) for sj in top],
+        "gaps": _aggregate_gaps(top),
+        "recommendations": recommendations,
+        "career_score": career_score,
+    }
