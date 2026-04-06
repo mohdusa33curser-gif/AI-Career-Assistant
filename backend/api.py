@@ -112,23 +112,33 @@ def post_analyze_skills(
     """
     Normalize skill labels, assign default weights, and run the analysis engine.
 
-    Request body: ``{"skills": ["Python", "SQL", ...]}``.
+    Request body: {"skills": ["Python", "SQL", ...]}.
     """
     service = _dataset_service(request)
     jobs = service.get_all_jobs()
+    job_embedding_lookup = service.get_job_embedding_lookup()
+
     weight_map = skill_labels_to_weight_map(body.skills)
-    raw = analyze_cv_skills(weight_map, jobs, top_k=body.top_k)
+
+    raw = analyze_cv_skills(
+        weight_map,
+        jobs,
+        top_k=body.top_k,
+        job_embedding_lookup=job_embedding_lookup,
+    )
+
     display_payload = {
         **apply_skill_display_to_analysis_payload(
             {
                 "skills": raw["skills"],
                 "gaps": raw["gaps"],
                 "top_jobs": raw["top_jobs"],
-            },
+            }
         ),
         "recommendations": raw["recommendations"],
         "career_score": raw["career_score"],
     }
+
     return AnalyzeSkillsResponse.model_validate(display_payload)
 
 
@@ -143,6 +153,7 @@ async def post_analyze_cv(
     """
     service = _dataset_service(request)
     jobs = service.get_all_jobs()
+    job_embedding_lookup = service.get_job_embedding_lookup()
 
     name = (file.filename or "").strip()
     if not name.lower().endswith(".pdf"):
@@ -161,22 +172,34 @@ async def post_analyze_cv(
     extracted_canonical = extract_skills_from_cv_text(cleaned, jobs)
     weight_map = skill_labels_to_weight_map(extracted_canonical)
 
-    result = analyze_cv_skills(weight_map, jobs, top_k=top_k)
+    result = analyze_cv_skills(
+        weight_map,
+        jobs,
+        top_k=top_k,
+        cv_text=cleaned,
+        job_embedding_lookup=job_embedding_lookup,
+    )
 
-    message: str | None = None
     recommendations = list(result["recommendations"])
-    if not extracted_canonical:
-        message = "No recognizable technical skills were detected in the uploaded CV."
-        recommendations = []
 
-    extracted_display = [display_label_for_canonical(s) for s in extracted_canonical]
+    if not extracted_canonical:
+        message = (
+            "No recognizable technical skills were detected directly, "
+            "so semantic CV understanding was used more heavily."
+        )
+    else:
+        message = "Skills were successfully extracted and combined with semantic analysis."
+
+    extracted_display = [display_label_for_canonical(skill) for skill in extracted_canonical]
+
     mapped = apply_skill_display_to_analysis_payload(
         {
             "skills": result["skills"],
             "gaps": result["gaps"],
             "top_jobs": result["top_jobs"],
-        },
+        }
     )
+
     payload = {
         **mapped,
         "extracted_skills": extracted_display,
@@ -193,11 +216,16 @@ async def post_analyze_cv(
         matched_keys,
         extracted_display,
     )
+
     top_jobs = result.get("top_jobs", [])
     top3_preview = [
-        {"title": j.get("job_title"), "match_percent": j.get("match_percent")}
-        for j in top_jobs[:3]
+        {
+            "title": job.get("job_title"),
+            "match_percent": job.get("match_percent"),
+        }
+        for job in top_jobs[:3]
     ]
+
     logger.info(
         "analyze-cv: extracted_skills=%s skill_count=%d top_3_job_matches=%s career_score=%.2f",
         extracted_display,
@@ -207,3 +235,4 @@ async def post_analyze_cv(
     )
 
     return AnalyzeCVResponse.model_validate(payload)
+    

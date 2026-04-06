@@ -6,3 +6,5 @@ pydantic
 python-multipart
 PyMuPDF
 scikit-learn
+sentence-transformers>=3.0.0
+torch>=2.7.0

@@ -12,8 +12,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Final, TypedDict, Iterable
 
+import numpy as np
 import pandas as pd
 from pydantic import BaseModel, Field, field_validator
+from sentence_transformers import SentenceTransformer
+
 
 from models import DatasetSummary, JobRecord , CanonicalSkillProfile
 from utils import clean_optional_text, split_pipe_values
@@ -43,12 +46,13 @@ SKILL_PRIORITY_WEIGHTS: Final[dict[str, int]] = {
 """Default weight for user-supplied skills when no job-specific priority is known."""
 DEFAULT_USER_SKILL_WEIGHT: Final[int] = SKILL_PRIORITY_WEIGHTS["Moderate"]
 
-"""Canonical skill keys (see ``skill_normalization``) blocked from CV extraction."""
-SKILL_EXTRACTION_BLOCKLIST_LOWER: Final[frozenset[str]] = frozenset(
-    {
-        "technical documentation",
-    },
-)
+SEMANTIC_MODEL_NAME: Final[str] = "all-MiniLM-L6-v2"
+SEMANTIC_TEXT_MAX_CHARS: Final[int] = 4000
+HYBRID_SCORE_WEIGHTS: Final[dict[str, float]] = {
+    "semantic": 0.50,
+    "weighted_skill": 0.30,
+    "exact_overlap": 0.20,
+}
 
 # --- config (merged) ---
 
@@ -611,6 +615,109 @@ def build_job_skill_profile(
 
     return core_skills_canonical, description_skill_hints, profile
 
+def _priority_weight_to_label(weight: int) -> str:
+    return {3: "high", 2: "moderate", 1: "low"}.get(int(weight), "moderate")
+
+
+def _normalize_profile_fragment(value: str | None) -> str:
+    if not value:
+        return ""
+    return normalize_whitespace(str(value))
+
+
+def _truncate_profile_text(text: str, max_chars: int = SEMANTIC_TEXT_MAX_CHARS) -> str:
+    cleaned = normalize_whitespace(text)
+    if len(cleaned) <= max_chars:
+        return cleaned
+
+    clipped = cleaned[:max_chars].rsplit(" ", 1)[0].strip()
+    return clipped or cleaned[:max_chars].strip()
+
+
+def build_job_profile_text(job: JobRecord) -> str:
+    weighted_skills = job.effective_skill_weights()
+    weighted_skills_text = ", ".join(
+        f"{prettify_skill_label(skill)} [{_priority_weight_to_label(weight)}]"
+        for skill, weight in sorted(weighted_skills.items(), key=lambda item: (-item[1], item[0]))
+    )
+    core_skills_text = ", ".join(prettify_skill_label(skill) for skill in sorted(job.core_skills_canonical))
+    description_hints_text = ", ".join(prettify_skill_label(skill) for skill in sorted(job.description_skill_hints))
+    soft_skills_text = ", ".join(x.strip() for x in job.soft_skills if str(x).strip())
+
+    parts = [
+        f"Job Title: {_normalize_profile_fragment(job.job_title)}",
+        f"Category: {_normalize_profile_fragment(job.category)}",
+    ]
+
+    if weighted_skills_text:
+        parts.append(f"Priority Skills: {weighted_skills_text}")
+    if core_skills_text:
+        parts.append(f"Core Skills: {core_skills_text}")
+    if description_hints_text:
+        parts.append(f"Description Hints: {description_hints_text}")
+    if soft_skills_text:
+        parts.append(f"Soft Skills: {soft_skills_text}")
+    if job.description:
+        parts.append(f"Description: {_normalize_profile_fragment(job.description)}")
+    if job.education:
+        parts.append(f"Education: {_normalize_profile_fragment(job.education)}")
+    if job.experience:
+        parts.append(f"Experience: {_normalize_profile_fragment(job.experience)}")
+
+    return _truncate_profile_text("\n".join(part for part in parts if part.strip()))
+
+
+def build_cv_profile_text(cv_text: str, extracted_skills: dict[str, int]) -> str:
+    skill_summary = ", ".join(
+        prettify_skill_label(skill)
+        for skill, _weight in sorted(extracted_skills.items(), key=lambda item: (-item[1], item[0]))
+    )
+
+    parts: list[str] = []
+    if skill_summary:
+        parts.append(f"Detected Skills: {skill_summary}")
+    if cv_text:
+        parts.append(f"CV Content: {_normalize_profile_fragment(cv_text)}")
+
+    return _truncate_profile_text("\n".join(parts))
+
+
+@lru_cache(maxsize=1)
+def get_sentence_transformer_model():
+    if SentenceTransformer is None:
+        raise RuntimeError(
+            "sentence-transformers is not installed. Run: pip install -r requirements.txt"
+        )
+    return SentenceTransformer(SEMANTIC_MODEL_NAME)
+
+
+def encode_texts_to_embeddings(texts: list[str]) -> list[list[float]]:
+    normalized_texts = [_truncate_profile_text(text) for text in texts if text and text.strip()]
+    if not normalized_texts:
+        return []
+
+    model = get_sentence_transformer_model()
+    vectors = model.encode(
+        normalized_texts,
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+        show_progress_bar=False,
+    )
+    return [vector.astype(float).tolist() for vector in vectors]
+
+
+
+def cosine_similarity_embeddings(vec1: list[float], vec2: list[float]) -> float:
+    if not vec1 or not vec2:
+        return 0.0
+
+    a = np.asarray(vec1, dtype=float)
+    b = np.asarray(vec2, dtype=float)
+    if a.size == 0 or b.size == 0 or a.shape != b.shape:
+        return 0.0
+
+    similarity = float(np.dot(a, b))
+    return round(max(0.0, min(1.0, similarity)), 6)
 
 def collect_dataset_skill_vocabulary(jobs: Iterable[JobRecord]) -> set[str]:
     """
@@ -916,6 +1023,276 @@ def required_logical_columns() -> tuple[str, ...]:
     """Public list of canonical column keys expected after resolution."""
     return REQUIRED_LOGICAL_COLUMNS
 
+
+SEMANTIC_MODEL_NAME = "all-MiniLM-L6-v2"
+
+SEMANTIC_WEIGHT = 0.50
+WEIGHTED_SKILL_WEIGHT = 0.30
+EXACT_OVERLAP_WEIGHT = 0.20
+
+
+from functools import lru_cache
+
+@lru_cache(maxsize=1)
+def get_embedding_model():
+    return SentenceTransformer("all-MiniLM-L6-v2")
+
+
+def _safe_join(parts: list[str]) -> str:
+    cleaned = []
+    for part in parts:
+        if part is None:
+            continue
+        value = str(part).strip()
+        if value:
+            cleaned.append(value)
+    return "\n".join(cleaned)
+
+
+def _coerce_weight(value: Any) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    text = str(value).strip().lower()
+    mapping = {
+        "high": 3.0,
+        "moderate": 2.0,
+        "medium": 2.0,
+        "low": 1.0,
+    }
+    return mapping.get(text, 1.0)
+
+
+def _normalize_to_unit_interval(value: float) -> float:
+    # cosine similarity from [-1, 1] -> [0, 1]
+    return max(0.0, min(1.0, (value + 1.0) / 2.0))
+
+
+def build_job_profile_text(job: Any) -> str:
+    parsed_skills = getattr(job, "parsed_skills", {}) or {}
+    core_skills = list(parsed_skills.keys())
+
+    priority_lines = [
+        f"{skill} ({parsed_skills[skill]})"
+        for skill in core_skills
+    ]
+
+    description = getattr(job, "job_description", None) or getattr(job, "description", None) or ""
+    category = getattr(job, "category", "") or ""
+    title = getattr(job, "job_title", "") or ""
+
+    description_hints = getattr(job, "description_skill_hints", None) or []
+    if isinstance(description_hints, dict):
+        description_hints = list(description_hints.keys())
+
+    return _safe_join(
+        [
+            f"Job Title: {title}",
+            f"Category: {category}",
+            f"Description: {description}",
+            "Core Skills: " + ", ".join(core_skills) if core_skills else "",
+            "Priority Skills: " + ", ".join(priority_lines) if priority_lines else "",
+            "Related Concepts: " + ", ".join(description_hints) if description_hints else "",
+        ]
+    )
+
+
+def build_cv_profile_text(cv_text: str | None, extracted_skills: list[str] | None) -> str:
+    extracted_skills = extracted_skills or []
+    return _safe_join(
+        [
+            "CV Text:",
+            cv_text or "",
+            "Extracted Skills: " + ", ".join(extracted_skills) if extracted_skills else "",
+        ]
+    )
+
+
+def get_text_embedding(text: str) -> np.ndarray:
+    if not text or not text.strip():
+        return np.zeros(384, dtype=np.float32)
+
+    model = get_embedding_model()
+    vector = model.encode(
+        text,
+        normalize_embeddings=True,
+        convert_to_numpy=True,
+        show_progress_bar=False,
+    )
+    return np.asarray(vector, dtype=np.float32)
+
+
+def cosine_similarity_embeddings(vec1: np.ndarray, vec2: np.ndarray) -> float:
+    if vec1 is None or vec2 is None:
+        return 0.0
+    if vec1.size == 0 or vec2.size == 0:
+        return 0.0
+
+    denom = float(np.linalg.norm(vec1) * np.linalg.norm(vec2))
+    if denom == 0.0:
+        return 0.0
+
+    cosine = float(np.dot(vec1, vec2) / denom)
+    return _normalize_to_unit_interval(cosine)
+
+
+def calculate_semantic_match_score(
+    cv_text: str | None,
+    extracted_skills: list[str],
+    job: Any,
+    job_embedding_lookup: dict[int, np.ndarray] | None,
+) -> float:
+    if not cv_text and not extracted_skills:
+        return 0.0
+
+    cv_profile_text = build_cv_profile_text(cv_text, extracted_skills)
+    cv_embedding = get_text_embedding(cv_profile_text)
+
+    job_embedding = None
+    if job_embedding_lookup:
+        job_embedding = job_embedding_lookup.get(id(job))
+
+    if job_embedding is None:
+        job_profile_text = build_job_profile_text(job)
+        job_embedding = get_text_embedding(job_profile_text)
+
+    return cosine_similarity_embeddings(cv_embedding, job_embedding)
+
+def calculate_weighted_skill_match(
+    user_skill_weights: dict[str, float],
+    job_skill_weights: dict[str, float],
+) -> float:
+    if not job_skill_weights:
+        return 0.0
+
+    total_required_weight = sum(job_skill_weights.values())
+    if total_required_weight == 0:
+        return 0.0
+
+    matched_weight = 0.0
+    for skill, required_weight in job_skill_weights.items():
+        user_weight = user_skill_weights.get(skill, 0.0)
+        if user_weight > 0:
+            matched_weight += min(user_weight, required_weight)
+
+    score = matched_weight / total_required_weight
+    return max(0.0, min(1.0, score))
+
+
+def calculate_exact_overlap_score(
+    user_skill_weights: dict[str, float],
+    job_skill_weights: dict[str, float],
+) -> float:
+    if not job_skill_weights:
+        return 0.0
+
+    job_skills = set(job_skill_weights.keys())
+    user_skills = set(user_skill_weights.keys())
+
+    if not job_skills:
+        return 0.0
+
+    overlap_count = len(job_skills & user_skills)
+    return overlap_count / len(job_skills)
+
+
+def calculate_hybrid_match_score(
+    semantic_score: float,
+    weighted_skill_score: float,
+    exact_overlap_score: float,
+) -> float:
+    score = (
+        (SEMANTIC_WEIGHT * semantic_score)
+        + (WEIGHTED_SKILL_WEIGHT * weighted_skill_score)
+        + (EXACT_OVERLAP_WEIGHT * exact_overlap_score)
+    )
+    return max(0.0, min(1.0, score))
+
+
+def _build_job_skill_weights(job: Any) -> dict[str, float]:
+    parsed_skills = getattr(job, "parsed_skills", {}) or {}
+    result: dict[str, float] = {}
+
+    for raw_skill, raw_weight in parsed_skills.items():
+        canonical = canonicalize_skill(raw_skill)
+        result[canonical] = _coerce_weight(raw_weight)
+
+    return result
+
+
+def _build_user_skill_weights(user_skills: dict[str, Any]) -> dict[str, float]:
+    result: dict[str, float] = {}
+
+    for raw_skill, raw_weight in (user_skills or {}).items():
+        canonical = canonicalize_skill(raw_skill)
+        result[canonical] = max(result.get(canonical, 0.0), _coerce_weight(raw_weight))
+
+    return result
+
+
+def _split_skill_strengths(
+    user_skill_weights: dict[str, float],
+    job_skill_weights: dict[str, float],
+) -> tuple[list[str], list[str], list[str]]:
+    strong: list[str] = []
+    partial: list[str] = []
+    missing: list[str] = []
+
+    for skill, required_weight in job_skill_weights.items():
+        user_weight = user_skill_weights.get(skill, 0.0)
+
+        if user_weight >= required_weight and user_weight > 0:
+            strong.append(skill)
+        elif user_weight > 0:
+            partial.append(skill)
+        else:
+            missing.append(skill)
+
+    return strong, partial, missing
+
+
+def _build_recommendations_from_top_jobs(top_jobs: list[dict[str, Any]]) -> list[str]:
+    if not top_jobs:
+        return [
+            "Add more technical skills to your CV.",
+            "Include clearer project descriptions with measurable outcomes.",
+            "Use explicit role-related keywords that match target jobs.",
+        ]
+
+    missing_counter: Counter[str] = Counter()
+    for job in top_jobs[:5]:
+        for skill in job.get("missing_skills", [])[:5]:
+            missing_counter[skill] += 1
+
+    recommendations: list[str] = []
+
+    best_job = top_jobs[0]
+    recommendations.append(
+        f"Your strongest current direction is {best_job.get('job_title', 'a relevant role')}."
+    )
+
+    for skill, _ in missing_counter.most_common(3):
+        recommendations.append(
+            f"Improve your profile by strengthening {display_label_for_canonical(skill)}."
+        )
+
+    recommendations.append(
+        "Make your CV describe projects using outcomes, tools, and responsibilities more explicitly."
+    )
+
+    return recommendations[:5]
+
+
+def _calculate_career_score_from_top_jobs(top_jobs: list[dict[str, Any]]) -> float:
+    if not top_jobs:
+        return 0.0
+
+    top_scores = [float(job.get("match_percent", 0.0)) for job in top_jobs[:5]]
+    if not top_scores:
+        return 0.0
+
+    return round(sum(top_scores) / len(top_scores), 2)
+
 # --- data_loader (merged) ---
 
 class JobDatasetService:
@@ -928,6 +1305,9 @@ class JobDatasetService:
         self._resolved_dataset_path: Path | None = None
         self._validation_warnings: list[str] = []
         self._column_map: dict[str, str] | None = None
+        self._job_profile_text_by_row: dict[int, str] = {}
+        self._job_embedding_by_row: dict[int, list[float]] = {}
+        self._job_embedding_lookup: dict[int, np.ndarray] = {}
 
     def _backend_root(self) -> Path:
         return Path(__file__).resolve().parent
@@ -937,7 +1317,21 @@ class JobDatasetService:
         if configured.is_absolute():
             return configured.resolve()
         return (self._backend_root() / configured).resolve()
+    
+    def _build_job_embedding_cache(self) -> None:
+        lookup: dict[int, np.ndarray] = {}
 
+        for job in self.get_all_jobs():
+            profile_text = build_job_profile_text(job)
+            lookup[id(job)] = get_text_embedding(profile_text)
+
+        self._job_embedding_lookup = lookup
+
+
+    def get_job_embedding_lookup(self) -> dict[int, np.ndarray]:
+        return self._job_embedding_lookup
+
+    
     def is_loaded(self) -> bool:
         """Return True after ``load_dataset`` has completed successfully."""
         return self._jobs is not None
@@ -1031,8 +1425,32 @@ class JobDatasetService:
             jobs.append(record)
 
         self._jobs = jobs
+        self._build_semantic_cache(jobs)
         self._summary = self._compute_summary(path)
+        self._build_job_embedding_cache()
         return jobs
+
+    def _build_semantic_cache(self, jobs: list[JobRecord]) -> None:
+        self._job_profile_text_by_row = {}
+        self._job_embedding_by_row = {}
+
+        if not jobs:
+            return
+
+        row_indexes: list[int] = []
+        profile_texts: list[str] = []
+
+        for job in jobs:
+            profile_text = build_job_profile_text(job)
+            self._job_profile_text_by_row[job.source_row_index] = profile_text
+            row_indexes.append(job.source_row_index)
+            profile_texts.append(profile_text)
+
+        embeddings = encode_texts_to_embeddings(profile_texts)
+        self._job_embedding_by_row = {
+            row_index: embedding
+            for row_index, embedding in zip(row_indexes, embeddings, strict=False)
+        }
 
     def _compute_summary(self, path: Path) -> DatasetSummary:
         assert self._jobs is not None
@@ -1062,7 +1480,7 @@ class JobDatasetService:
         return list(self._jobs)
 
     def get_dataset_summary(self) -> DatasetSummary:
-        """Return aggregate statistics for the loaded dataset."""
+        """Return aggregate statistics for the loaded jobs dataset."""
         if self._summary is None:
             raise RuntimeError("Dataset has not been loaded yet.")
         return self._summary
@@ -1073,6 +1491,16 @@ class JobDatasetService:
             raise RuntimeError("Dataset has not been loaded yet.")
         cap = max(0, min(limit, len(self._jobs)))
         return list(self._jobs[:cap])
+
+    def get_job_embedding_lookup(self) -> dict[int, list[float]]:
+        if self._jobs is None:
+            raise RuntimeError("Dataset has not been loaded yet.")
+        return dict(self._job_embedding_by_row)
+
+    def get_job_profile_text_lookup(self) -> dict[int, str]:
+        if self._jobs is None:
+            raise RuntimeError("Dataset has not been loaded yet.")
+        return dict(self._job_profile_text_by_row)
 
 # --- gap_analyzer (merged) ---
 
@@ -1161,9 +1589,8 @@ def gap_summary_to_serializable(gap: dict[str, list[SkillGapEntry]]) -> dict[str
 
 def calculate_match_score(user_skills: dict[str, int], job_skills: dict[str, int]) -> float:
     """
-    Match score between user skills and a job profile.
+    Structured match score between user skills and a job profile.
 
-    New behavior:
     - exact canonical matches count fully
     - family/domain matches count partially
     - denominator stays based on the job's direct required skills
@@ -1180,14 +1607,32 @@ def calculate_match_score(user_skills: dict[str, int], job_skills: dict[str, int
     return round(max(0.0, min(score, 100.0)), 4)
 
 
+def calculate_exact_overlap_score(user_skills: dict[str, int], job_skills: dict[str, int]) -> float:
+    """Direct canonical overlap only, without family expansion."""
+    if not user_skills or not job_skills:
+        return 0.0
+
+    total_job_weight = sum(job_skills.values())
+    if total_job_weight <= 0:
+        return 0.0
+
+    matched = 0.0
+    for skill, job_weight in job_skills.items():
+        direct_user_weight = user_skills.get(skill, 0)
+        if direct_user_weight > 0:
+            matched += min(float(direct_user_weight), float(job_weight))
+
+    score = (matched / total_job_weight) * 100.0
+    return round(max(0.0, min(score, 100.0)), 4)
+
+
+
 def sparse_cosine_similarity(a: dict[str, int], b: dict[str, int]) -> float:
     """
     Cosine similarity between two sparse non-negative integer skill vectors.
 
     Used to suggest roles with similar skill *patterns* (vector similarity), separate
-
-    Returns:
-        Value in ``[0, 1]``, or ``0`` if either vector has zero L2 norm.
+    from the main hybrid score.
     """
     if not a or not b:
         return 0.0
@@ -1206,22 +1651,9 @@ def sparse_cosine_similarity(a: dict[str, int], b: dict[str, int]) -> float:
     sim = dot / (norm_a * norm_b)
     return round(max(0.0, min(1.0, sim)), 6)
 
-# --- vectorizer (merged) ---
 
 def build_skill_vector(skill_dict: dict[str, int]) -> dict[str, int]:
-    """
-    Build a sparse skill vector: canonical skill names, positive integer weights.
-
-    - Keys are normalized through the same synonym map as job parsing.
-    - Duplicate canonical skills keep the **maximum** weight.
-    - Non-positive weights are dropped.
-
-    Args:
-        skill_dict: Raw skill name → weight mapping (e.g. from CSV or user input).
-
-    Returns:
-        Canonical sparse vector suitable for matching and similarity.
-    """
+    """Canonical sparse vector suitable for matching and similarity."""
     result: dict[str, int] = {}
     for raw_name, weight in skill_dict.items():
         if weight <= 0:
@@ -1234,21 +1666,8 @@ def build_skill_vector(skill_dict: dict[str, int]) -> dict[str, int]:
             result[key] = weight
     return result
 
-# --- scorer (merged) ---
 
 def calculate_career_score(match_scores: list[float]) -> float:
-    """
-    Career readiness score from the best alignment signals.
-
-    Uses the top five match percentages (or fewer if less data), averages them,
-    and clamps to ``[0, 100]``.
-
-    Args:
-        match_scores: Match percentages (0–100) in any order.
-
-    Returns:
-        Single readiness score in ``[0, 100]``.
-    """
     if not match_scores:
         return 0.0
 
@@ -1256,38 +1675,89 @@ def calculate_career_score(match_scores: list[float]) -> float:
     avg = sum(top) / len(top)
     return round(max(0.0, min(100.0, avg)), 4)
 
-# --- recommender (merged) ---
 
 @dataclass(frozen=True)
 class ScoredJob:
-    """Job with precomputed vectors, match score, and gap analysis."""
+    """Job with structured + semantic scoring, final rank, and gap analysis."""
 
     job: JobRecord
     user_vector: dict[str, int]
     job_vector: dict[str, int]
     match_percent: float
+    structured_match_percent: float
+    exact_overlap_percent: float
+    semantic_match_percent: float
     gap: dict[str, list[SkillGapEntry]]
+
+
+def _compute_final_hybrid_score(
+    *,
+    structured_match_percent: float,
+    exact_overlap_percent: float,
+    semantic_match_percent: float,
+    use_semantic: bool,
+    has_structured_signal: bool,
+) -> float:
+    if use_semantic and not has_structured_signal:
+        return round(max(0.0, min(100.0, semantic_match_percent)), 4)
+
+    if not use_semantic:
+        return round(max(0.0, min(100.0, structured_match_percent)), 4)
+
+    final_score = (
+        semantic_match_percent * HYBRID_SCORE_WEIGHTS["semantic"]
+        + structured_match_percent * HYBRID_SCORE_WEIGHTS["weighted_skill"]
+        + exact_overlap_percent * HYBRID_SCORE_WEIGHTS["exact_overlap"]
+    )
+    return round(max(0.0, min(100.0, final_score)), 4)
 
 
 def score_jobs_against_user(
     jobs: list[JobRecord],
     user_skills: dict[str, int],
+    *,
+    cv_text: str | None = None,
+    job_embedding_lookup: dict[int, list[float]] | None = None,
 ) -> list[ScoredJob]:
-    """
-    Build canonical vectors and attach match percentage plus gap analysis per job.
-    """
+    """Build all per-job scores using structured matching and optional semantic matching."""
     user_vector = build_skill_vector(user_skills)
     scored: list[ScoredJob] = []
+
+    use_semantic = bool(cv_text and job_embedding_lookup)
+    has_structured_signal = bool(user_vector)
+    cv_embedding: list[float] = []
+    if use_semantic:
+        cv_profile_text = build_cv_profile_text(cv_text or "", user_vector)
+        cv_embedding = get_text_embedding(cv_profile_text)
+        use_semantic = bool(cv_embedding)
+
     for job in jobs:
-        job_vector = build_skill_vector(job.parsed_skills)
-        match_pct = calculate_match_score(user_vector, job_vector)
+        job_vector = build_skill_vector(job.effective_skill_weights())
+        structured_match_percent = calculate_match_score(user_vector, job_vector)
+        exact_overlap_percent = calculate_exact_overlap_score(user_vector, job_vector)
+
+        semantic_match_percent = 0.0
+        if use_semantic and job_embedding_lookup is not None:
+            job_embedding = job_embedding_lookup.get(job.source_row_index, [])
+            semantic_match_percent = calculate_semantic_match_score(cv_embedding, job_embedding)
+
+        final_match_percent = _compute_final_hybrid_score(
+            structured_match_percent=structured_match_percent,
+            exact_overlap_percent=exact_overlap_percent,
+            semantic_match_percent=semantic_match_percent,
+            use_semantic=use_semantic,
+            has_structured_signal=has_structured_signal,
+        )
         gap = analyze_skill_gap(user_vector, job_vector)
         scored.append(
             ScoredJob(
                 job=job,
                 user_vector=user_vector,
                 job_vector=job_vector,
-                match_percent=match_pct,
+                match_percent=final_match_percent,
+                structured_match_percent=structured_match_percent,
+                exact_overlap_percent=exact_overlap_percent,
+                semantic_match_percent=semantic_match_percent,
                 gap=gap,
             ),
         )
@@ -1295,12 +1765,12 @@ def score_jobs_against_user(
 
 
 def select_top_matches(scored: list[ScoredJob], limit: int = 5) -> list[ScoredJob]:
-    """Return the highest ``match_percent`` rows (stable tie-break by title)."""
+    """Return the highest ranked jobs using final hybrid score."""
     if limit <= 0:
         return []
     ordered = sorted(
         scored,
-        key=lambda s: (-s.match_percent, s.job.job_title, s.job.source_row_index),
+        key=lambda s: (-s.match_percent, -s.structured_match_percent, s.job.job_title, s.job.source_row_index),
     )
     return ordered[:limit]
 
@@ -1310,14 +1780,15 @@ def get_top_jobs(
     user_skills: dict[str, int],
     *,
     limit: int = 5,
+    cv_text: str | None = None,
+    job_embedding_lookup: dict[int, list[float]] | None = None,
 ) -> list[ScoredJob]:
-    """
-    Score every job against the user vector and return the best matches.
-
-    Prefer :func:`score_jobs_against_user` plus :func:`select_top_matches` when you
-    already have a scored list (e.g. for alternative-job suggestions).
-    """
-    scored = score_jobs_against_user(jobs, user_skills)
+    scored = score_jobs_against_user(
+        jobs,
+        user_skills,
+        cv_text=cv_text,
+        job_embedding_lookup=job_embedding_lookup,
+    )
     return select_top_matches(scored, limit)
 
 
@@ -1895,59 +2366,96 @@ def _top_job_payload(sj: ScoredJob) -> dict[str, Any]:
 
 
 def analyze_cv_skills(
-    user_skills: dict[str, int],
-    jobs: list[JobRecord],
-    *,
+    user_skills: dict[str, Any],
+    jobs: list[Any],
     top_k: int = 10,
+    cv_text: str | None = None,
+    job_embedding_lookup: dict[int, np.ndarray] | None = None,
 ) -> dict[str, Any]:
-    """
-    Compare user skills against all loaded jobs and produce ranked insights.
 
-    When the user vector is empty, returns empty ``top_jobs``, ``gaps``, and
-    ``recommendations`` with ``career_score`` 0 (no placeholder job rankings).
-    """
-    user_vector = build_skill_vector(user_skills)
+    user_skill_weights = _build_user_skill_weights(user_skills)
+    extracted_skill_list = list(user_skill_weights.keys())
 
-    if not jobs:
-        return {
-            "skills": user_vector,
-            "top_jobs": [],
-            "gaps": [],
-            "recommendations": [],
-            "career_score": 0.0,
-        }
+    ranked_jobs: list[dict[str, Any]] = []
 
-    if not user_vector:
-        return {
-            "skills": {},
-            "top_jobs": [],
-            "gaps": [],
-            "recommendations": [],
-            "career_score": 0.0,
-        }
-
-    scored = score_jobs_against_user(jobs, user_skills)
-    top = select_top_matches(scored, top_k)
-    match_scores = [sj.match_percent for sj in top]
-    career_score = calculate_career_score(match_scores)
-
-    missing_recs = get_missing_skills_recommendation(top)
-    recommendations = build_text_recommendations(missing_recs, career_score)
-
-    alternatives = rank_alternative_jobs(scored, top, 3)
-    for i, alt in enumerate(alternatives):
-        recommendations.append(
-            {
-                "title": f"Related path: {alt['job_title']}",
-                "description": str(alt["message"]),
-                "priority": 4.0 + i * 0.1,
-            },
+    # 🔥 أهم تحسين: نحسب embedding مرة واحدة فقط
+    cv_embedding = None
+    if cv_text or extracted_skill_list:
+        cv_embedding = get_text_embedding(
+            build_cv_profile_text(cv_text, extracted_skill_list)
         )
 
+    for job in jobs:
+        job_skill_weights = _build_job_skill_weights(job)
+
+        # ✅ semantic (سريع)
+        job_embedding = None
+        if job_embedding_lookup:
+            job_embedding = job_embedding_lookup.get(id(job))
+
+        if job_embedding is None:
+            job_embedding = get_text_embedding(build_job_profile_text(job))
+
+        if cv_embedding is not None:
+            semantic_score = cosine_similarity_embeddings(cv_embedding, job_embedding)
+        else:
+            semantic_score = 0.0
+
+        # ✅ skills
+        weighted_skill_score = calculate_weighted_skill_match(
+            user_skill_weights,
+            job_skill_weights,
+        )
+
+        exact_overlap_score = calculate_exact_overlap_score(
+            user_skill_weights,
+            job_skill_weights,
+        )
+
+        # ✅ hybrid
+        final_score = calculate_hybrid_match_score(
+            semantic_score,
+            weighted_skill_score,
+            exact_overlap_score,
+        )
+
+        strong_skills, partial_skills, missing_skills = _split_skill_strengths(
+            user_skill_weights,
+            job_skill_weights,
+        )
+
+        ranked_jobs.append(
+            {
+                "job_title": getattr(job, "job_title", "Unknown Role"),
+                "category": getattr(job, "category", "Unknown"),
+                "match_percent": round(final_score * 100.0, 2),
+                "strong_skills": strong_skills[:10],
+                "partial_skills": partial_skills[:10],
+                "missing_skills": missing_skills[:10],
+            }
+        )
+
+    ranked_jobs.sort(key=lambda item: item["match_percent"], reverse=True)
+    top_jobs = ranked_jobs[:top_k]
+
+    gaps = [
+        {
+            "job_title": job["job_title"],
+            "category": job["category"],
+            "missing_skills": job["missing_skills"],
+        }
+        for job in top_jobs[:5]
+        if job["missing_skills"]
+    ]
+
+    recommendations = _build_recommendations_from_top_jobs(top_jobs)
+    career_score = _calculate_career_score_from_top_jobs(top_jobs)
+
     return {
-        "skills": user_vector,
-        "top_jobs": [_top_job_payload(sj) for sj in top],
-        "gaps": _aggregate_gaps(top),
+        "skills": user_skill_weights,
+        "gaps": gaps,
+        "top_jobs": top_jobs,
         "recommendations": recommendations,
         "career_score": career_score,
     }
+    
