@@ -1135,7 +1135,7 @@ class JobDatasetService:
             dataset_path=path,
             validation_warnings=list(self._validation_warnings),
         )
-        
+
     def get_all_jobs(self) -> list[JobRecord]:
         """Return every cached job record (copy of the list container)."""
         if self._jobs is None:
@@ -1165,45 +1165,67 @@ class SkillGapEntry(TypedDict):
     user_weight: int
 
 
-def analyze_skill_gap(
-    user_skills: dict[str, int],
-    job_skills: dict[str, int],
-) -> dict[str, list[SkillGapEntry]]:
+def analyze_skill_gap(user_skills: dict[str, int], job_skills: dict[str, int]) -> dict[str, list[dict[str, int | str]]]:
     """
-    Classify each job-required skill relative to the user vector.
-
-    - **strong**: user weight >= job weight (meets or exceeds requirement).
-    - **partial**: user has the skill but below required weight.
-    - **missing**: user weight is zero.
-
-    Args:
-        user_skills: Canonical user sparse vector (non-negative ints).
-        job_skills: Canonical job sparse vector.
-
-    Returns:
-        ``{"strong": [...], "partial": [...], "missing": [...]}`` lists sorted by
-        ``job_weight`` descending, then skill name.
+    Classify job skills into:
+    - strong: exact canonical match with enough user weight
+    - partial: exact but lower weight, OR family/domain level match
+    - missing: no meaningful coverage at all
     """
-    strong: list[SkillGapEntry] = []
-    partial: list[SkillGapEntry] = []
-    missing: list[SkillGapEntry] = []
+    result: dict[str, list[dict[str, int | str]]] = {
+        "strong": [],
+        "partial": [],
+        "missing": [],
+    }
 
-    for skill in sorted(job_skills.keys()):
-        job_w = job_skills[skill]
-        if job_w <= 0:
+    if not job_skills:
+        return result
+
+    expanded_user = expand_skill_set_for_matching(user_skills)
+
+    for job_skill, job_weight in job_skills.items():
+        direct_user_weight = user_skills.get(job_skill, 0)
+        expanded_user_weight = expanded_user.get(job_skill, 0)
+
+        if direct_user_weight >= job_weight and direct_user_weight > 0:
+            result["strong"].append(
+                {
+                    "skill": prettify_skill_label(job_skill),
+                    "job_weight": job_weight,
+                    "user_weight": direct_user_weight,
+                }
+            )
             continue
-        user_w = user_skills.get(skill, 0)
-        entry: SkillGapEntry = {
-            "skill": skill,
-            "job_weight": job_w,
-            "user_weight": user_w,
-        }
-        if user_w <= 0:
-            missing.append(entry)
-        elif user_w >= job_w:
-            strong.append(entry)
-        else:
-            partial.append(entry)
+
+        if direct_user_weight > 0:
+            result["partial"].append(
+                {
+                    "skill": prettify_skill_label(job_skill),
+                    "job_weight": job_weight,
+                    "user_weight": direct_user_weight,
+                }
+            )
+            continue
+
+        if expanded_user_weight > 0:
+            result["partial"].append(
+                {
+                    "skill": prettify_skill_label(job_skill),
+                    "job_weight": job_weight,
+                    "user_weight": expanded_user_weight,
+                }
+            )
+            continue
+
+        result["missing"].append(
+            {
+                "skill": prettify_skill_label(job_skill),
+                "job_weight": job_weight,
+                "user_weight": 0,
+            }
+        )
+
+    return result
 
     def sort_key(e: SkillGapEntry) -> tuple[int, str]:
         return (-e["job_weight"], e["skill"])
@@ -1227,31 +1249,23 @@ def gap_summary_to_serializable(gap: dict[str, list[SkillGapEntry]]) -> dict[str
 
 def calculate_match_score(user_skills: dict[str, int], job_skills: dict[str, int]) -> float:
     """
-    Weighted match percentage: overlap strength relative to the job requirement vector.
+    Match score between user skills and a job profile.
 
-    ``matched_weight = sum_k min(user[k], job[k])`` over skills present in the job.
-    ``total_job_weight = sum_k job[k]``.
-
-    Returns:
-        Score in ``[0, 100]``. ``0`` if the job defines no positive weights.
+    New behavior:
+    - exact canonical matches count fully
+    - family/domain matches count partially
+    - denominator stays based on the job's direct required skills
     """
-    if not job_skills:
+    if not user_skills or not job_skills:
         return 0.0
 
     total_job_weight = sum(job_skills.values())
     if total_job_weight <= 0:
         return 0.0
 
-    matched_weight = 0
-    for skill, job_w in job_skills.items():
-        if job_w <= 0:
-            continue
-        user_w = user_skills.get(skill, 0)
-        if user_w > 0:
-            matched_weight += min(user_w, job_w)
-
-    ratio = matched_weight / total_job_weight
-    return round(max(0.0, min(100.0, ratio * 100.0)), 4)
+    matched_total, _ = _skill_overlap_score(user_skills, job_skills)
+    score = (matched_total / total_job_weight) * 100.0
+    return round(max(0.0, min(score, 100.0)), 4)
 
 
 def sparse_cosine_similarity(a: dict[str, int], b: dict[str, int]) -> float:
@@ -1630,8 +1644,90 @@ def extract_text_from_pdf_bytes(data: bytes) -> str:
 # --- skill_extractor (merged) ---
 
 def collect_canonical_vocabulary(jobs: Iterable[JobRecord]) -> set[str]:
-    return collect_dataset_skill_vocabulary(jobs)
+    """
+    Build a broad canonical vocabulary for CV extraction.
 
+    Old behavior:
+    - only used parsed_skills keys
+
+    New behavior:
+    - parsed skills
+    - canonical core skills
+    - description hints
+    - effective merged skill keys
+    """
+    vocabulary: set[str] = set()
+
+    for job in jobs:
+        vocabulary.update(job.parsed_skills.keys())
+        vocabulary.update(job.core_skills_canonical)
+        vocabulary.update(job.description_skill_hints)
+        vocabulary.update(job.effective_skill_keys())
+
+    return {skill for skill in vocabulary if skill}
+
+def _family_expansion_for_skill(skill: str) -> set[str]:
+    """
+    Return family/domain concepts implied by a canonical skill.
+    Example:
+    - aws -> {"cloud"}
+    - tensorflow -> {"machine learning", "deep learning", "ai"}
+    """
+    if not skill:
+        return set()
+    return set(SKILL_FAMILY_MAP.get(skill, set()))
+
+
+def expand_skill_set_for_matching(weighted_skills: dict[str, int]) -> dict[str, int]:
+    """
+    Expand a canonical weighted skill map with family/domain hints.
+
+    Rules:
+    - exact skills keep their original weight
+    - family/domain implied skills are added with lighter weight
+    - if skill already exists, keep the higher weight
+    """
+    expanded: dict[str, int] = dict(weighted_skills)
+
+    for skill, weight in list(weighted_skills.items()):
+        for family_skill in _family_expansion_for_skill(skill):
+            inferred_weight = max(1, weight - 1)
+            current = expanded.get(family_skill, 0)
+            if inferred_weight > current:
+                expanded[family_skill] = inferred_weight
+
+    return expanded
+
+
+def _skill_overlap_score(
+    user_skills: dict[str, int],
+    job_skills: dict[str, int],
+) -> tuple[float, dict[str, str]]:
+    """
+    Compute overlap between user and job using:
+    1) exact canonical match
+    2) family/domain expansion
+
+    Returns:
+    - weighted matched total
+    - match mode per job skill:
+      {"python": "exact", "cloud": "family", ...}
+    """
+    expanded_user = expand_skill_set_for_matching(user_skills)
+    overlap_modes: dict[str, str] = {}
+    matched_total = 0.0
+
+    for job_skill, job_weight in job_skills.items():
+        if job_skill in user_skills:
+            matched_total += min(user_skills[job_skill], job_weight)
+            overlap_modes[job_skill] = "exact"
+            continue
+
+        if job_skill in expanded_user:
+            matched_total += min(expanded_user[job_skill], job_weight) * 0.7
+            overlap_modes[job_skill] = "family"
+
+    return matched_total, overlap_modes
 
 def vocabulary_for_cv_extraction(jobs: list[JobRecord]) -> frozenset[str]:
     """Dataset skill keys used when scanning CVs (drops extraction blocklist noise)."""
@@ -1677,43 +1773,143 @@ def _compiled_phrase_pattern(phrase_lower: str) -> re.Pattern[str]:
         r"(?<![A-Za-z0-9+#])" + core + r"(?![A-Za-z0-9+#])",
     )
 
+REVERSE_SKILL_ALIAS_MAP: dict[str, set[str]] = {}
+for alias, canonical in SKILL_ALIAS_MAP.items():
+    REVERSE_SKILL_ALIAS_MAP.setdefault(canonical, set()).add(alias)
 
-def extract_skills_from_cv_text(text: str, jobs: list[JobRecord]) -> list[str]:
+
+def _skill_surface_forms(canonical_skill: str) -> set[str]:
     """
-    Find vocabulary skills present in CV text.
-
-    Uses longest-match-first overlap resolution so shorter tokens (e.g. Java)
-    do not steal spans from longer ones (e.g. JavaScript). Phrases include exact
-    dataset names, lowercase forms, and synonym/alias expansions from constants.
-
-    Generic low-signal skills (blocklist) are removed after matching.
+    Build likely written forms for a canonical skill so we can match noisy CV text.
     """
-    vocabulary = vocabulary_for_cv_extraction(jobs)
-    if not vocabulary:
+    forms: set[str] = set()
+
+    if not canonical_skill:
+        return forms
+
+    forms.add(canonical_skill)
+    forms.add(normalize_skill_surface(canonical_skill))
+    forms.add(normalize_skill_surface(prettify_skill_label(canonical_skill)))
+
+    for alias in REVERSE_SKILL_ALIAS_MAP.get(canonical_skill, set()):
+        forms.add(normalize_skill_surface(alias))
+
+    # extra friendly variants
+    extra_forms: set[str] = set()
+    for form in list(forms):
+        extra_forms.add(form.replace(".", " "))
+        extra_forms.add(form.replace("/", " "))
+        extra_forms.add(form.replace("-", " "))
+
+    forms.update(extra_forms)
+
+    # explicit important variants
+    if canonical_skill == "c++":
+        forms.update({"cpp", "c plus plus"})
+    elif canonical_skill == "c#":
+        forms.update({"c sharp"})
+    elif canonical_skill == ".net":
+        forms.update({"dotnet", "net core"})
+    elif canonical_skill == "node.js":
+        forms.update({"node", "nodejs", "node js"})
+    elif canonical_skill == "react":
+        forms.update({"reactjs", "react js"})
+    elif canonical_skill == "javascript":
+        forms.update({"js"})
+    elif canonical_skill == "typescript":
+        forms.update({"ts"})
+    elif canonical_skill == "machine learning":
+        forms.update({"ml"})
+    elif canonical_skill == "artificial intelligence":
+        forms.update({"ai"})
+    elif canonical_skill == "natural language processing":
+        forms.update({"nlp"})
+    elif canonical_skill == "google cloud":
+        forms.update({"gcp", "google cloud platform"})
+    elif canonical_skill == "aws":
+        forms.update({"amazon web services", "aws cloud"})
+    elif canonical_skill == "asp.net":
+        forms.update({"aspnet", "asp net", "asp.net mvc"})
+
+    return {normalize_skill_surface(form) for form in forms if normalize_skill_surface(form)}
+
+
+def _surface_exists_in_text(normalized_text: str, surface: str) -> bool:
+    """
+    Check if a skill surface form exists in normalized CV text.
+    Uses stricter matching for short tokens.
+    """
+    if not normalized_text or not surface:
+        return False
+
+    padded_text = f" {normalized_text} "
+    normalized_surface = normalize_skill_surface(surface)
+
+    if not normalized_surface:
+        return False
+
+    # One-letter skills like R need strict surrounding spaces.
+    if len(normalized_surface) == 1:
+        return f" {normalized_surface} " in padded_text
+
+    # Technical tokens with punctuation are safer with padded phrase matching.
+    if any(ch in normalized_surface for ch in ".+#/"):
+        return f" {normalized_surface} " in padded_text
+
+    # Multi-word phrase
+    if " " in normalized_surface:
+        return f" {normalized_surface} " in padded_text
+
+    # One plain token
+    return re.search(rf"\b{re.escape(normalized_surface)}\b", normalized_text) is not None
+
+def extract_skills_from_cv_text(cv_text: str, vocabulary: Iterable[str]) -> list[str]:
+    """
+    Extract canonical skills from noisy CV text using:
+    - canonical vocabulary
+    - alias forms
+    - readable variants
+    - description hint patterns
+
+    Returns display-friendly labels.
+    """
+    if not cv_text:
         return []
 
-    normalized = normalize_cv_text_for_skill_extraction(text)
-    if not normalized.strip():
+    normalized_text = normalize_cv_text_for_skill_extraction(cv_text)
+    if not normalized_text:
         return []
 
-    pairs = _build_ordered_phrases(vocabulary)
-    raw_hits: list[tuple[int, int, str]] = []
+    canonical_vocabulary = {
+        canonicalize_skill_name(skill)
+        for skill in vocabulary
+        if skill
+    }
+    canonical_vocabulary = {
+        skill for skill in canonical_vocabulary
+        if skill and skill not in GENERIC_NON_SKILL_TERMS
+    }
 
-    for phrase_lower, canon in pairs:
-        rx = _compiled_phrase_pattern(phrase_lower)
-        for m in rx.finditer(normalized):
-            raw_hits.append((m.start(), m.end(), canon))
+    detected: set[str] = set()
 
-    raw_hits.sort(key=lambda x: -(x[1] - x[0]))
-    used: list[tuple[int, int]] = []
-    found: set[str] = set()
-    for start, end, canon in raw_hits:
-        if any(not (end <= s or start >= e) for s, e in used):
-            continue
-        used.append((start, end))
-        found.add(canon)
+    for canonical_skill in sorted(canonical_vocabulary, key=len, reverse=True):
+        matched = False
 
-    return sorted(found)
+        for surface in _skill_surface_forms(canonical_skill):
+            if _surface_exists_in_text(normalized_text, surface):
+                matched = True
+                break
+
+        if not matched and canonical_skill in DESCRIPTION_HINT_PATTERNS:
+            for pattern in DESCRIPTION_HINT_PATTERNS[canonical_skill]:
+                if _surface_exists_in_text(normalized_text, pattern):
+                    matched = True
+                    break
+
+        if matched:
+            detected.add(canonical_skill)
+
+    return [prettify_skill_label(skill) for skill in sorted(detected)]
 
 
 def vocabulary_sample_for_debug(vocabulary: frozenset[str], limit: int = 80) -> list[str]:
