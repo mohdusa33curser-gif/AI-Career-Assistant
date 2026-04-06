@@ -10,12 +10,12 @@ from collections import Counter
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Final, TypedDict
+from typing import Any, Final, TypedDict, Iterable
 
 import pandas as pd
 from pydantic import BaseModel, Field, field_validator
 
-from models import DatasetSummary, JobRecord
+from models import DatasetSummary, JobRecord , CanonicalSkillProfile
 from utils import clean_optional_text, split_pipe_values
 
 
@@ -193,6 +193,422 @@ def resolve_column_mapping(df: pd.DataFrame) -> dict[str, str]:
         )
 
     return resolved
+
+
+# ---------------------------------------------------------------------------
+# Skill intelligence layer - part 1
+# Canonicalization + job skill profile building
+# ---------------------------------------------------------------------------
+
+SKILL_TOKEN_SPLIT_RE = re.compile(r"[|,/;]+")
+MULTISPACE_RE = re.compile(r"\s+")
+PARENS_RE = re.compile(r"\([^)]*\)")
+NON_ALNUM_KEEP_TECH_RE = re.compile(r"[^a-zA-Z0-9\s\+\#\.\-]")
+
+GENERIC_NON_SKILL_TERMS = {
+    "documentation",
+    "technical documentation",
+    "system",
+    "systems",
+    "project",
+    "projects",
+    "analysis",
+    "development",
+    "software development",
+    "application development",
+    "technical support",
+    "communication",
+    "teamwork",
+    "leadership",
+    "problem solving",
+    "critical thinking",
+}
+
+# canonical form = what the backend should compare internally
+SKILL_ALIAS_MAP: dict[str, str] = {
+    # programming languages
+    "cpp": "c++",
+    "c plus plus": "c++",
+    "c sharp": "c#",
+    "cs": "c#",
+    "py": "python",
+    "golang": "go",
+    "js": "javascript",
+    "ts": "typescript",
+
+    # frameworks / platforms
+    "reactjs": "react",
+    "react js": "react",
+    "node": "node.js",
+    "nodejs": "node.js",
+    "node js": "node.js",
+    "nextjs": "next.js",
+    "next js": "next.js",
+    "vuejs": "vue.js",
+    "vue js": "vue.js",
+    "angularjs": "angular",
+    "dotnet": ".net",
+    "net core": ".net",
+    "asp net": "asp.net",
+    "aspnet": "asp.net",
+
+    # ai / data
+    "ml": "machine learning",
+    "dl": "deep learning",
+    "nlp": "natural language processing",
+    "cv": "computer vision",
+    "ai": "artificial intelligence",
+    "llm": "large language models",
+    "genai": "generative ai",
+
+    # cloud / devops
+    "amazon web services": "aws",
+    "aws cloud": "aws",
+    "google cloud platform": "google cloud",
+    "gcp": "google cloud",
+    "azure cloud": "azure",
+    "ci cd": "ci/cd",
+    "cicd": "ci/cd",
+    "docker containerization": "docker",
+
+    # databases / backend
+    "postgres": "postgresql",
+    "mongo": "mongodb",
+    "ms sql": "sql",
+    "mysql db": "mysql",
+    "nosql db": "nosql",
+
+    # engineering variants
+    "mat lab": "matlab",
+    "pro engineer": "cad",
+    "pro-engineer": "cad",
+    "cad programming": "cad",
+    "assembler": "assembly",
+    "assembly language": "assembly",
+    "asp.net mvc": "asp.net",
+}
+
+# some skills imply broader families
+SKILL_FAMILY_MAP: dict[str, set[str]] = {
+    "aws": {"cloud"},
+    "google cloud": {"cloud"},
+    "azure": {"cloud"},
+    "docker": {"devops", "containerization"},
+    "kubernetes": {"devops", "containerization"},
+    "ci/cd": {"devops"},
+    "tensorflow": {"machine learning", "deep learning", "ai"},
+    "pytorch": {"machine learning", "deep learning", "ai"},
+    "scikit-learn": {"machine learning", "ai"},
+    "pandas": {"data analysis", "data"},
+    "numpy": {"data analysis", "data"},
+    "sql": {"databases", "data"},
+    "postgresql": {"databases", "data"},
+    "mysql": {"databases", "data"},
+    "mongodb": {"databases", "nosql"},
+    "react": {"frontend", "web development"},
+    "angular": {"frontend", "web development"},
+    "vue.js": {"frontend", "web development"},
+    "node.js": {"backend", "web development"},
+    "asp.net": {"backend", "web development"},
+    "python": {"backend", "data", "ai"},
+    "java": {"backend"},
+    "c++": {"systems programming"},
+    "assembly": {"embedded systems", "low-level programming"},
+    "matlab": {"numerical computing"},
+    "cad": {"engineering design"},
+}
+
+DESCRIPTION_HINT_PATTERNS: dict[str, tuple[str, ...]] = {
+    "aws": (" aws ", "amazon web services"),
+    "google cloud": (" google cloud ", "gcp", "google cloud platform"),
+    "azure": (" azure ",),
+    "docker": (" docker ", "containerization"),
+    "kubernetes": (" kubernetes ", "k8s"),
+    "react": (" react ", "reactjs"),
+    "javascript": (" javascript ", " js "),
+    "typescript": (" typescript ", " ts "),
+    "python": (" python ",),
+    "java": (" java ",),
+    "c++": (" c++ ", " cpp "),
+    "sql": (" sql ", "postgres", "mysql", "database design"),
+    "machine learning": (" machine learning ", " ml "),
+    "deep learning": (" deep learning ", " neural network "),
+    "natural language processing": (" natural language processing ", " nlp "),
+    "computer vision": (" computer vision ",),
+    "tensorflow": (" tensorflow ",),
+    "pytorch": (" pytorch ",),
+    "kafka": (" kafka ",),
+    "hadoop": (" hadoop ",),
+    "cassandra": (" cassandra ",),
+    "etl": (" etl ", " data pipeline ", " data pipelines "),
+    "cad": (" cad ", "computer aided design"),
+    "matlab": (" matlab ",),
+    "assembly": (" assembler ", " assembly "),
+}
+
+
+def normalize_whitespace(value: str) -> str:
+    return MULTISPACE_RE.sub(" ", value).strip()
+
+
+def normalize_skill_surface(raw_skill: str) -> str:
+    """
+    Normalize a raw skill mention without destroying technical tokens.
+
+    Examples:
+    - ' ReactJS '     -> 'reactjs'
+    - 'Node JS'       -> 'node js'
+    - 'Assembler (...)' -> 'assembler'
+    - 'C++'           -> 'c++'
+    - 'ASP.Net'       -> 'asp.net'
+    """
+    if not raw_skill:
+        return ""
+
+    value = str(raw_skill).strip().lower()
+    value = PARENS_RE.sub(" ", value)
+    value = value.replace("_", " ").replace("/", " / ")
+    value = value.replace("-", " ")
+    value = NON_ALNUM_KEEP_TECH_RE.sub(" ", value)
+    value = normalize_whitespace(value)
+
+    # normalize a few common punctuation variants
+    value = value.replace("node js", "nodejs")
+    value = value.replace("react js", "reactjs")
+    value = value.replace("next js", "nextjs")
+    value = value.replace("vue js", "vuejs")
+    value = value.replace("asp . net", "asp.net")
+    value = value.replace("asp net", "aspnet")
+
+    return value
+
+
+def canonicalize_skill_name(raw_skill: str) -> str:
+    """
+    Convert any raw skill string into the canonical backend representation.
+
+    This is the most important comparison layer.
+    """
+    base = normalize_skill_surface(raw_skill)
+    if not base:
+        return ""
+
+    canonical = SKILL_ALIAS_MAP.get(base, base)
+
+    # final cleanup
+    canonical = canonical.strip().lower()
+
+    if canonical in GENERIC_NON_SKILL_TERMS:
+        return ""
+
+    return canonical
+
+
+def prettify_skill_label(canonical_skill: str) -> str:
+    """
+    Convert canonical internal values into readable UI labels.
+
+    Internal:
+    - c++
+    - machine learning
+    - node.js
+
+    Display:
+    - C++
+    - Machine Learning
+    - Node.js
+    """
+    if not canonical_skill:
+        return ""
+
+    special = {
+        "c++": "C++",
+        "c#": "C#",
+        "javascript": "JavaScript",
+        "typescript": "TypeScript",
+        "node.js": "Node.js",
+        "react": "React",
+        "vue.js": "Vue.js",
+        "next.js": "Next.js",
+        "asp.net": "ASP.NET",
+        ".net": ".NET",
+        "sql": "SQL",
+        "aws": "AWS",
+        "ci/cd": "CI/CD",
+        "api": "API",
+        "etl": "ETL",
+        "nlp": "NLP",
+        "ai": "AI",
+        "cad": "CAD",
+        "matlab": "MATLAB",
+        "mongodb": "MongoDB",
+        "postgresql": "PostgreSQL",
+        "mysql": "MySQL",
+        "hadoop": "Hadoop",
+        "kafka": "Kafka",
+        "cassandra": "Cassandra",
+        "tensorflow": "TensorFlow",
+        "pytorch": "PyTorch",
+        "scikit-learn": "Scikit-learn",
+        "google cloud": "Google Cloud",
+    }
+
+    if canonical_skill in special:
+        return special[canonical_skill]
+
+    return " ".join(word.capitalize() for word in canonical_skill.split())
+
+
+def parse_core_skills_raw(raw_value: str) -> set[str]:
+    """
+    Parse the Core Skills column into canonical skill names.
+
+    Supports strings like:
+    'Python|SQL|React'
+    """
+    if raw_value is None or (isinstance(raw_value, float) and math.isnan(raw_value)):
+        return set()
+
+    text = str(raw_value).strip()
+    if not text:
+        return set()
+
+    parts = [part.strip() for part in SKILL_TOKEN_SPLIT_RE.split(text)]
+    canonical_skills: set[str] = set()
+
+    for part in parts:
+        canonical = canonicalize_skill_name(part)
+        if canonical:
+            canonical_skills.add(canonical)
+
+    return canonical_skills
+
+
+def extract_description_skill_hints(description: str) -> set[str]:
+    """
+    Extract lightweight skill hints directly from job description text.
+
+    This is NOT the main matching engine.
+    It only enriches each job profile with obvious description cues.
+    """
+    if not description:
+        return set()
+
+    text = f" {normalize_skill_surface(description)} "
+    hints: set[str] = set()
+
+    for canonical_skill, patterns in DESCRIPTION_HINT_PATTERNS.items():
+        for pattern in patterns:
+            normalized_pattern = f" {normalize_skill_surface(pattern)} "
+            if normalized_pattern.strip() and normalized_pattern in text:
+                hints.add(canonical_skill)
+                break
+
+    return hints
+
+
+def build_job_skill_profile(
+    *,
+    job_title: str,
+    category: str,
+    parsed_skills: dict[str, int],
+    core_skills_raw: str,
+    description: str,
+) -> tuple[set[str], set[str], CanonicalSkillProfile]:
+    """
+    Build the merged job skill representation used later for better matching.
+
+    Sources merged here:
+    1) parsed_skills           -> strongest source (weighted)
+    2) Core Skills column      -> medium source
+    3) Description skill hints -> weak source
+    """
+    core_skills_canonical = parse_core_skills_raw(core_skills_raw)
+    description_skill_hints = extract_description_skill_hints(description)
+
+    profile = CanonicalSkillProfile()
+
+    # strongest layer: explicit weighted priority skills
+    for raw_skill, weight in parsed_skills.items():
+        canonical = canonicalize_skill_name(raw_skill)
+        if canonical:
+            profile.add_skill(
+                canonical_skill=canonical,
+                weight=int(weight),
+                source="job_priority",
+                matched_text=raw_skill,
+                confidence=1.0,
+            )
+
+    # medium layer: core skills
+    for canonical in core_skills_canonical:
+        # if not already present, add with medium default weight
+        existing_weight = profile.weighted_skills.get(canonical, 0)
+        inferred_weight = max(existing_weight, 2)
+        profile.add_skill(
+            canonical_skill=canonical,
+            weight=inferred_weight,
+            source="job_core",
+            matched_text=canonical,
+            confidence=0.9,
+        )
+
+    # weak layer: description hints
+    for canonical in description_skill_hints:
+        existing_weight = profile.weighted_skills.get(canonical, 0)
+        inferred_weight = max(existing_weight, 1)
+        profile.add_skill(
+            canonical_skill=canonical,
+            weight=inferred_weight,
+            source="job_description",
+            matched_text=canonical,
+            confidence=0.6,
+        )
+
+    # attach family relations for future matching upgrades
+    for skill in list(profile.weighted_skills.keys()):
+        family_values = SKILL_FAMILY_MAP.get(skill, set())
+        if family_values:
+            profile.families[skill] = set(family_values)
+
+    # lightweight category enrichment
+    category_key = normalize_skill_surface(category)
+    if category_key == "frontend":
+        for implied in ("frontend", "web development"):
+            profile.families.setdefault(implied, set())
+    elif category_key == "backend":
+        for implied in ("backend", "server-side"):
+            profile.families.setdefault(implied, set())
+    elif category_key == "data":
+        for implied in ("data", "data analysis"):
+            profile.families.setdefault(implied, set())
+    elif category_key == "ai":
+        for implied in ("ai", "machine learning"):
+            profile.families.setdefault(implied, set())
+    elif category_key == "devops":
+        for implied in ("devops", "cloud"):
+            profile.families.setdefault(implied, set())
+
+    return core_skills_canonical, description_skill_hints, profile
+
+
+def collect_dataset_skill_vocabulary(jobs: Iterable[JobRecord]) -> set[str]:
+    """
+    Collect the broadest possible canonical skill vocabulary from loaded jobs.
+
+    This is stronger than relying only on parsed_skills.
+    """
+    vocabulary: set[str] = set()
+
+    for job in jobs:
+        vocabulary.update(job.parsed_skills.keys())
+        vocabulary.update(job.core_skills_canonical)
+        vocabulary.update(job.description_skill_hints)
+        vocabulary.update(job.effective_skill_keys())
+
+    return {skill for skill in vocabulary if skill}
+
+
 
 # --- skill_normalization (merged) ---
 
@@ -637,6 +1053,7 @@ class JobDatasetService:
         col = validation.column_map
 
         jobs: list[JobRecord] = []
+
         for row_index, (_, row) in enumerate(df.iterrows()):
             sp_raw = clean_optional_text(row.get(col["Skill Priority Level"], ""))
             parsed = parse_skill_priority_pairs(sp_raw)
@@ -654,21 +1071,43 @@ class JobDatasetService:
                 except ValueError:
                     final_count = None
 
-            record = JobRecord(
-                job_title=clean_optional_text(row.get(col["Job Title"], "")),
-                category=clean_optional_text(row.get(col["Category"], "")),
-                description=clean_optional_text(row.get(col["Description"], "")),
-                ui_description=clean_optional_text(row.get(col["UI Description"], "")),
-                core_skills_raw=clean_optional_text(row.get(col["Core Skills"], "")),
-                skill_priority_raw=sp_raw,
+            job_title = clean_optional_text(row.get(col["Job Title"], ""))
+            category = clean_optional_text(row.get(col["Category"], ""))
+            description = clean_optional_text(row.get(col["Description"], ""))
+            ui_description = clean_optional_text(row.get(col["UI Description"], ""))
+            core_skills_raw = clean_optional_text(row.get(col["Core Skills"], ""))
+            skill_priority_raw = sp_raw
+            education = clean_optional_text(row.get(col["Education"], ""))
+            experience = clean_optional_text(row.get(col["Experience"], ""))
+            salary_range = clean_optional_text(row.get(col["Salary Range"], ""))
+            job_trend = clean_optional_text(row.get(col["Job Trend"], ""))
+
+            core_skills_canonical, description_skill_hints, merged_skill_profile = build_job_skill_profile(
+                job_title=job_title,
+                category=category,
                 parsed_skills=parsed,
+                core_skills_raw=core_skills_raw,
+                description=description,
+            )
+
+            record = JobRecord(
+                job_title=job_title,
+                category=category,
+                description=description,
+                ui_description=ui_description,
+                core_skills_raw=core_skills_raw,
+                skill_priority_raw=skill_priority_raw,
+                parsed_skills=dict(merged_skill_profile.weighted_skills),
                 soft_skills=soft_list,
-                education=clean_optional_text(row.get(col["Education"], "")),
-                experience=clean_optional_text(row.get(col["Experience"], "")),
-                salary_range=clean_optional_text(row.get(col["Salary Range"], "")),
-                job_trend=clean_optional_text(row.get(col["Job Trend"], "")),
+                education=education,
+                experience=experience,
+                salary_range=salary_range,
+                job_trend=job_trend,
                 final_skill_count=final_count,
                 source_row_index=row_index,
+                core_skills_canonical=core_skills_canonical,
+                description_skill_hints=description_skill_hints,
+                merged_skill_profile=merged_skill_profile,
             )
             jobs.append(record)
 
@@ -696,7 +1135,7 @@ class JobDatasetService:
             dataset_path=path,
             validation_warnings=list(self._validation_warnings),
         )
-
+        
     def get_all_jobs(self) -> list[JobRecord]:
         """Return every cached job record (copy of the list container)."""
         if self._jobs is None:
@@ -1190,12 +1629,8 @@ def extract_text_from_pdf_bytes(data: bytes) -> str:
 
 # --- skill_extractor (merged) ---
 
-def collect_canonical_vocabulary(jobs: list[JobRecord]) -> frozenset[str]:
-    """All unique normalized skill names appearing in loaded job records."""
-    skills: set[str] = set()
-    for job in jobs:
-        skills.update(job.parsed_skills.keys())
-    return frozenset(skills)
+def collect_canonical_vocabulary(jobs: Iterable[JobRecord]) -> set[str]:
+    return collect_dataset_skill_vocabulary(jobs)
 
 
 def vocabulary_for_cv_extraction(jobs: list[JobRecord]) -> frozenset[str]:
@@ -1287,28 +1722,28 @@ def vocabulary_sample_for_debug(vocabulary: frozenset[str], limit: int = 80) -> 
 
 # --- analyze_service (merged) ---
 
-def skill_labels_to_weight_map(
-    labels: list[str],
-    default_weight: int = DEFAULT_USER_SKILL_WEIGHT,
-) -> dict[str, int]:
+def skill_labels_to_weight_map(skill_labels: list[str], default_weight: int = 2) -> dict[str, int]:
     """
-    Convert API skill labels to a weight map with synonym normalization.
+Convert incoming user/CV skill labels into canonical weighted skills.
 
-    Duplicate labels merge by **maximum** weight (all equal to ``default_weight`` here).
-    Empty or invalid tokens are skipped.
+    Why:
+    - user input may be: cpp, ML, ReactJS, nodejs
+    - backend matching must compare canonical forms only
     """
-    out: dict[str, int] = {}
-    for label in labels:
-        cleaned = clean_optional_text(label)
-        if not cleaned:
-            continue
-        key = normalize_skill_name(cleaned)
-        if not key:
-            continue
-        prev = out.get(key, 0)
-        out[key] = max(prev, default_weight)
-    return out
+    canonical_weights: dict[str, int] = {}
 
+    if not skill_labels:
+        return canonical_weights
+
+    for raw_label in skill_labels:
+        canonical = canonicalize_skill_name(raw_label)
+        if not canonical:
+            continue
+
+        current_weight = canonical_weights.get(canonical, 0)
+        canonical_weights[canonical] = max(current_weight, default_weight)
+
+    return canonical_weights
 
 def _aggregate_gaps(top_jobs: list[ScoredJob]) -> list[dict[str, Any]]:
     """
