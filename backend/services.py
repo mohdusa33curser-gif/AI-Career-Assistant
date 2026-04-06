@@ -403,6 +403,26 @@ def canonicalize_skill_name(raw_skill: str) -> str:
 
     return canonical
 
+def canonicalize_skill(raw_skill: str) -> str:
+    """
+    Backward-compatible alias for older code paths.
+    """
+    return canonicalize_skill_name(raw_skill)
+
+
+def normalize_skill_name(skill: str) -> str:
+    """
+    Backward-compatible normalization entry point.
+    """
+    return canonicalize_skill_name(skill)
+
+
+def display_label_for_canonical(canonical_skill: str) -> str:
+    """
+    Backward-compatible display helper for older code paths.
+    """
+    return prettify_skill_label(canonical_skill)
+
 
 def prettify_skill_label(canonical_skill: str) -> str:
     """
@@ -614,84 +634,7 @@ def collect_dataset_skill_vocabulary(jobs: Iterable[JobRecord]) -> set[str]:
 
 _PAREN: Final[re.Pattern[str]] = re.compile(r"\([^)]*\)")
 
-# Alias / surface form → canonical matching key (stable identifiers shared by CV + dataset).
-SKILL_CANONICAL_ALIAS_MAP: Final[dict[str, str]] = {
-    "cpp": "c++",
-    "c plus plus": "c++",
-    "c++": "c++",
-    "ml": "machine learning",
-    "ai": "artificial intelligence",
-    "js": "javascript",
-    "reactjs": "react",
-    "react.js": "react",
-    "react": "react",
-    "node": "node.js",
-    "nodejs": "node.js",
-    "node.js": "node.js",
-    "asp net": "asp.net",
-    "aspnet": "asp.net",
-    "asp.net": "asp.net",
-    "gcp": "google cloud",
-    "aws cloud": "aws",
-    "aws": "aws",
-    "amazon web services": "aws",
-    "javascript": "javascript",
-    "typescript": "typescript",
-    "machine learning": "machine learning",
-    "artificial intelligence": "artificial intelligence",
-    "nlp": "natural language processing",
-    "natural language processing": "natural language processing",
-    "py": "python",
-    "python3": "python",
-    "python": "python",
-    "sql": "sql",
-    "microsoft azure": "azure",
-    "azure": "azure",
-    "google cloud": "google cloud",
-    "postgres": "postgresql",
-    "postgresql": "postgresql",
-    "mongo": "mongodb",
-    "mongodb": "mongodb",
-    "golang": "go",
-    "go lang": "go",
-    "go": "go",
-    "tf": "tensorflow",
-    "tensorflow": "tensorflow",
-    "pytorch": "pytorch",
-    "k8s": "kubernetes",
-    "kubernetes": "kubernetes",
-    "angularjs": "angular",
-    "angular": "angular",
-    "vue": "vue.js",
-    "vuejs": "vue.js",
-    "vue.js": "vue.js",
-    "dotnet": ".net",
-    ".net": ".net",
-    "c#": "c#",
-    "csharp": "c#",
-    "java": "java",
-    "kotlin": "kotlin",
-    "swift": "swift",
-    "scala": "scala",
-    "rust": "rust",
-    "php": "php",
-    "ruby": "ruby",
-    "docker": "docker",
-    "git": "git",
-    "linux": "linux",
-    "html": "html",
-    "css": "css",
-    "sass": "sass",
-    "webpack": "webpack",
-    "redis": "redis",
-    "kafka": "kafka",
-    "spark": "spark",
-    "hadoop": "hadoop",
-    "microservices": "microservices",
-    "ci cd": "ci/cd",
-    "cicd": "ci/cd",
-    "ci/cd": "ci/cd",
-}
+
 
 _CANONICAL_DISPLAY: Final[dict[str, str]] = {
     "c++": "C++",
@@ -775,32 +718,8 @@ def preprocess_skill_text(raw: str) -> str:
     return s
 
 
-def canonicalize_skill(raw: str) -> str:
-    """Return the canonical matching key for a skill string (dataset or résumé)."""
-    s = preprocess_skill_text(raw)
-    if not s:
-        return ""
-    for alias in sorted(SKILL_CANONICAL_ALIAS_MAP.keys(), key=len, reverse=True):
-        if s == alias:
-            return SKILL_CANONICAL_ALIAS_MAP[alias]
-    return s
 
 
-def normalize_skill_name(skill: str) -> str:
-    """Same as :func:`canonicalize_skill` (legacy name)."""
-    return canonicalize_skill(skill)
-
-
-def display_label_for_canonical(canon: str) -> str:
-    """Human-readable label for API/UI."""
-    if not canon:
-        return ""
-    if canon in _CANONICAL_DISPLAY:
-        return _CANONICAL_DISPLAY[canon]
-    if len(canon) <= 5 and "/" not in canon and canon.replace("-", "").isalpha():
-        return canon.upper()
-    parts = canon.replace("/", " / ").split()
-    return " ".join(p.capitalize() for p in parts)
 
 
 def aliases_for_canonical_key(canon: str) -> frozenset[str]:
@@ -809,7 +728,7 @@ def aliases_for_canonical_key(canon: str) -> frozenset[str]:
     if not ck:
         return frozenset()
     out: set[str] = {ck}
-    for alias, target in SKILL_CANONICAL_ALIAS_MAP.items():
+    for alias, target in SKILL_ALIAS_MAP.items():
         if target == ck:
             out.add(alias.lower().strip())
     if " " in ck:
@@ -854,7 +773,7 @@ def _display_top_job_row(job: dict) -> dict:
     return j
 
 
-skill_alias_map = SKILL_CANONICAL_ALIAS_MAP
+skill_alias_map = SKILL_ALIAS_MAP
 
 # --- skill_parser (merged) ---
 
@@ -1227,14 +1146,7 @@ def analyze_skill_gap(user_skills: dict[str, int], job_skills: dict[str, int]) -
 
     return result
 
-    def sort_key(e: SkillGapEntry) -> tuple[int, str]:
-        return (-e["job_weight"], e["skill"])
-
-    strong.sort(key=sort_key)
-    partial.sort(key=sort_key)
-    missing.sort(key=sort_key)
-
-    return {"strong": strong, "partial": partial, "missing": missing}
+    
 
 
 def gap_summary_to_serializable(gap: dict[str, list[SkillGapEntry]]) -> dict[str, list[dict[str, Any]]]:
@@ -1780,58 +1692,53 @@ for alias, canonical in SKILL_ALIAS_MAP.items():
 
 def _skill_surface_forms(canonical_skill: str) -> set[str]:
     """
-    Build likely written forms for a canonical skill so we can match noisy CV text.
+    Build likely written forms for one canonical skill.
     """
-    forms: set[str] = set()
-
     if not canonical_skill:
-        return forms
+        return set()
 
-    forms.add(canonical_skill)
-    forms.add(normalize_skill_surface(canonical_skill))
-    forms.add(normalize_skill_surface(prettify_skill_label(canonical_skill)))
+    forms: set[str] = {
+        canonical_skill,
+        normalize_skill_surface(canonical_skill),
+        normalize_skill_surface(prettify_skill_label(canonical_skill)),
+    }
 
     for alias in REVERSE_SKILL_ALIAS_MAP.get(canonical_skill, set()):
         forms.add(normalize_skill_surface(alias))
 
-    # extra friendly variants
-    extra_forms: set[str] = set()
-    for form in list(forms):
-        extra_forms.add(form.replace(".", " "))
-        extra_forms.add(form.replace("/", " "))
-        extra_forms.add(form.replace("-", " "))
-
-    forms.update(extra_forms)
-
-    # explicit important variants
     if canonical_skill == "c++":
-        forms.update({"cpp", "c plus plus"})
+        forms.update({"cpp", "c plus plus", "c++"})
     elif canonical_skill == "c#":
-        forms.update({"c sharp"})
+        forms.update({"c sharp", "c#"})
     elif canonical_skill == ".net":
-        forms.update({"dotnet", "net core"})
+        forms.update({"dotnet", ".net", "net core"})
     elif canonical_skill == "node.js":
-        forms.update({"node", "nodejs", "node js"})
+        forms.update({"node", "nodejs", "node js", "node.js"})
     elif canonical_skill == "react":
-        forms.update({"reactjs", "react js"})
+        forms.update({"react", "reactjs", "react js"})
     elif canonical_skill == "javascript":
-        forms.update({"js"})
+        forms.update({"javascript", "js"})
     elif canonical_skill == "typescript":
-        forms.update({"ts"})
+        forms.update({"typescript", "ts"})
     elif canonical_skill == "machine learning":
-        forms.update({"ml"})
+        forms.update({"machine learning", "ml"})
     elif canonical_skill == "artificial intelligence":
-        forms.update({"ai"})
+        forms.update({"artificial intelligence", "ai"})
     elif canonical_skill == "natural language processing":
-        forms.update({"nlp"})
+        forms.update({"natural language processing", "nlp"})
     elif canonical_skill == "google cloud":
-        forms.update({"gcp", "google cloud platform"})
+        forms.update({"gcp", "google cloud", "google cloud platform"})
     elif canonical_skill == "aws":
-        forms.update({"amazon web services", "aws cloud"})
+        forms.update({"aws", "amazon web services", "aws cloud"})
     elif canonical_skill == "asp.net":
-        forms.update({"aspnet", "asp net", "asp.net mvc"})
+        forms.update({"asp.net", "aspnet", "asp net", "asp.net mvc"})
 
-    return {normalize_skill_surface(form) for form in forms if normalize_skill_surface(form)}
+    clean_forms = {normalize_skill_surface(form) for form in forms if normalize_skill_surface(form)}
+    return clean_forms
+
+
+
+
 
 
 def _surface_exists_in_text(normalized_text: str, surface: str) -> bool:
@@ -1863,54 +1770,40 @@ def _surface_exists_in_text(normalized_text: str, surface: str) -> bool:
     # One plain token
     return re.search(rf"\b{re.escape(normalized_surface)}\b", normalized_text) is not None
 
-def extract_skills_from_cv_text(cv_text: str, vocabulary: Iterable[str]) -> list[str]:
-    """
-    Extract canonical skills from noisy CV text using:
-    - canonical vocabulary
-    - alias forms
-    - readable variants
-    - description hint patterns
+def extract_skills_from_cv_text(text: str, jobs: list[JobRecord]) -> dict[str, int]:
+    if not text or not jobs:
+        return {}
 
-    Returns display-friendly labels.
-    """
-    if not cv_text:
-        return []
+    normalized_text = normalize_cv_text_for_skill_extraction(text)
 
-    normalized_text = normalize_cv_text_for_skill_extraction(cv_text)
-    if not normalized_text:
-        return []
+    # 1) build vocabulary من dataset (أهم خطوة)
+    vocabulary = collect_canonical_vocabulary(jobs)
 
-    canonical_vocabulary = {
-        canonicalize_skill_name(skill)
-        for skill in vocabulary
-        if skill
-    }
-    canonical_vocabulary = {
-        skill for skill in canonical_vocabulary
-        if skill and skill not in GENERIC_NON_SKILL_TERMS
-    }
+    detected: dict[str, int] = {}
 
-    detected: set[str] = set()
+    for skill in vocabulary:
+        surfaces = _skill_surface_forms(skill)
 
-    for canonical_skill in sorted(canonical_vocabulary, key=len, reverse=True):
-        matched = False
-
-        for surface in _skill_surface_forms(canonical_skill):
+        for surface in surfaces:
             if _surface_exists_in_text(normalized_text, surface):
-                matched = True
+                detected[skill] = max(detected.get(skill, 0), DEFAULT_USER_SKILL_WEIGHT)
                 break
 
-        if not matched and canonical_skill in DESCRIPTION_HINT_PATTERNS:
-            for pattern in DESCRIPTION_HINT_PATTERNS[canonical_skill]:
-                if _surface_exists_in_text(normalized_text, pattern):
-                    matched = True
-                    break
+    # 2) context enrichment
+    context_patterns = {
+        "machine learning": ["model training", "predictive model"],
+        "data analysis": ["data cleaning", "data wrangling"],
+        "deep learning": ["neural network", "cnn", "rnn"],
+        "aws": ["ec2", "s3", "lambda"],
+        "docker": ["containerization", "containers"],
+    }
 
-        if matched:
-            detected.add(canonical_skill)
+    for skill, hints in context_patterns.items():
+        for hint in hints:
+            if hint in normalized_text:
+                detected[skill] = max(detected.get(skill, 0), DEFAULT_USER_SKILL_WEIGHT)
 
-    return [prettify_skill_label(skill) for skill in sorted(detected)]
-
+    return detected
 
 def vocabulary_sample_for_debug(vocabulary: frozenset[str], limit: int = 80) -> list[str]:
     """Sorted slice of canonical skills for debug endpoints."""
