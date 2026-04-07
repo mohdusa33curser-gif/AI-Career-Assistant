@@ -29,6 +29,7 @@ from services import (
     get_settings,
     skill_labels_to_weight_map,
     vocabulary_sample_for_debug,
+    prepare_display_extracted_skills,
 )
 
 logger = logging.getLogger(__name__)
@@ -109,17 +110,11 @@ def post_analyze_skills(
     body: AnalyzeSkillsRequest,
     request: Request,
 ) -> AnalyzeSkillsResponse:
-    """
-    Normalize skill labels, assign default weights, and run the analysis engine.
-
-    Request body: {"skills": ["Python", "SQL", ...]}.
-    """
     service = _dataset_service(request)
     jobs = service.get_all_jobs()
     job_embedding_lookup = service.get_job_embedding_lookup()
 
     weight_map = skill_labels_to_weight_map(body.skills)
-
     raw = analyze_cv_skills(
         weight_map,
         jobs,
@@ -137,8 +132,11 @@ def post_analyze_skills(
         ),
         "recommendations": raw["recommendations"],
         "career_score": raw["career_score"],
+        "career_path": raw.get("career_path"),
+        "next_role": raw.get("next_role"),
+        "learning_roadmap": raw.get("learning_roadmap", []),
+        "insight_summary": raw.get("insight_summary"),
     }
-
     return AnalyzeSkillsResponse.model_validate(display_payload)
 
 
@@ -148,9 +146,6 @@ async def post_analyze_cv(
     file: UploadFile = File(..., description="PDF curriculum vitae"),
     top_k: int = Query(10, ge=1, le=50, description="Number of top job matches to return."),
 ) -> AnalyzeCVResponse:
-    """
-    Accept a PDF, extract text, detect dataset vocabulary skills, then run the analyzer.
-    """
     service = _dataset_service(request)
     jobs = service.get_all_jobs()
     job_embedding_lookup = service.get_job_embedding_lookup()
@@ -169,20 +164,17 @@ async def post_analyze_cv(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     cleaned = clean_cv_text(pdf_text)
-    extracted_canonical = extract_skills_from_cv_text(cleaned, jobs)
-    weight_map = skill_labels_to_weight_map(extracted_canonical)
+    extracted_skill_weights = extract_skills_from_cv_text(cleaned, jobs)
 
     result = analyze_cv_skills(
-        weight_map,
+        extracted_skill_weights,
         jobs,
         top_k=top_k,
         cv_text=cleaned,
         job_embedding_lookup=job_embedding_lookup,
     )
 
-    recommendations = list(result["recommendations"])
-
-    if not extracted_canonical:
+    if not extracted_skill_weights:
         message = (
             "No recognizable technical skills were detected directly, "
             "so semantic CV understanding was used more heavily."
@@ -190,7 +182,7 @@ async def post_analyze_cv(
     else:
         message = "Skills were successfully extracted and combined with semantic analysis."
 
-    extracted_display = [display_label_for_canonical(skill) for skill in extracted_canonical]
+    extracted_display = prepare_display_extracted_skills(extracted_skill_weights)
 
     mapped = apply_skill_display_to_analysis_payload(
         {
@@ -203,29 +195,30 @@ async def post_analyze_cv(
     payload = {
         **mapped,
         "extracted_skills": extracted_display,
-        "recommendations": recommendations,
+        "recommendations": list(result["recommendations"]),
         "career_score": result["career_score"],
         "message": message,
+        "career_path": result.get("career_path"),
+        "next_role": result.get("next_role"),
+        "learning_roadmap": result.get("learning_roadmap", []),
+        "insight_summary": result.get("insight_summary"),
+
     }
 
     matched_keys = list(result.get("skills", {}).keys())
     logger.info(
         "analyze-cv skill-normalize-debug: raw_vocab_hits=%s canonical=%s matched_vector_keys=%s display=%s",
-        extracted_canonical,
-        [canonicalize_skill(x) for x in extracted_canonical],
+        list(extracted_skill_weights.keys()),
+        [canonicalize_skill(x) for x in extracted_skill_weights.keys()],
         matched_keys,
         extracted_display,
     )
 
     top_jobs = result.get("top_jobs", [])
     top3_preview = [
-        {
-            "title": job.get("job_title"),
-            "match_percent": job.get("match_percent"),
-        }
+        {"title": job.get("job_title"), "match_percent": job.get("match_percent")}
         for job in top_jobs[:3]
     ]
-
     logger.info(
         "analyze-cv: extracted_skills=%s skill_count=%d top_3_job_matches=%s career_score=%.2f",
         extracted_display,
@@ -235,4 +228,3 @@ async def post_analyze_cv(
     )
 
     return AnalyzeCVResponse.model_validate(payload)
-    

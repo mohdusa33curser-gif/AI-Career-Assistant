@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +232,7 @@ class JobGapSkillRow(BaseModel):
 
 
 class TopJobAnalysisResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
     """One ranked job with coverage score and per-job gap breakdown."""
 
     job_title: str
@@ -251,6 +252,7 @@ class AnalyzeSkillsRequest(BaseModel):
 
 
 class AnalyzeSkillsResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
     """Full skill–job intelligence payload."""
 
     skills: dict[str, int]
@@ -261,6 +263,7 @@ class AnalyzeSkillsResponse(BaseModel):
 
 
 class AnalyzeCVResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
     """Résumé upload pipeline: extracted skills plus the same analysis shape as /analyze-skills."""
 
     extracted_skills: list[str]

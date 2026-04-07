@@ -3,9 +3,11 @@ import { AnimatePresence, motion } from "framer-motion";
 import { cn } from "@/utils/helpers";
 import { Home } from "@/pages/Home";
 import { Results } from "@/pages/Results";
+import StudentPathPage from "@/components/StudentPathPage";
 
 const links = [
   { to: "/", label: "Home" },
+  { to: "/student-path", label: "Student Paths" },
   { to: "/results", label: "Results" },
 ];
 
@@ -39,6 +41,7 @@ export default function App() {
               Career<span className="text-accent">Lens</span>
             </span>
           </Link>
+
           <nav className="flex gap-1 sm:gap-2">
             {links.map((l) => (
               <NavPill key={l.to} to={l.to} label={l.label} />
@@ -46,6 +49,7 @@ export default function App() {
           </nav>
         </div>
       </header>
+
       <main className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
         <AnimatePresence mode="wait">
           <motion.div
@@ -57,6 +61,7 @@ export default function App() {
           >
             <Routes>
               <Route path="/" element={<Home />} />
+              <Route path="/student-path" element={<StudentPathPage />} />
               <Route path="/results" element={<Results />} />
             </Routes>
           </motion.div>
@@ -64,4 +69,4 @@ export default function App() {
       </main>
     </div>
   );
-}
+} 
