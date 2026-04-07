@@ -852,7 +852,7 @@ export function ResultsSection({ analysis }: { analysis: AnalysisResponse }) {
     : analysis.topMatches.slice(0, 3);
 
   return (
-    <div className="mx-auto w-full max-w-[1560px] overflow-x-hidden px-4 py-3 md:px-5 md:py-4 xl:px-6">
+    <div className="w-full overflow-x-hidden px-1 py-3 md:px-2 md:py-4">
       <div className="space-y-3">
         {analysis.analysisMessage ? (
           <Panel className="border-accent/20 bg-accent/5 p-4" delay={0}>
@@ -862,7 +862,7 @@ export function ResultsSection({ analysis }: { analysis: AnalysisResponse }) {
 
         <OverviewHeader analysis={analysis} readinessBand={readinessBand} />
 
-        <div className="grid items-start gap-5 xl:grid-cols-[250px_minmax(0,1fr)_270px] 2xl:grid-cols-[260px_minmax(0,1fr)_280px]">
+        <div className="grid items-start gap-5 xl:grid-cols-[240px_minmax(0,1fr)_260px] 2xl:grid-cols-[260px_minmax(0,1fr)_280px]">
           {/* LEFT */}
           <div className="min-w-0">
             <StrengthsBoard groupedSkills={groupedSkills} />

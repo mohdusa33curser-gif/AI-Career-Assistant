@@ -50,7 +50,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
+      <main className="mx-auto max-w-[1800px] px-4 py-10 xl:px-8">
         <AnimatePresence mode="wait">
           <motion.div
             key={location.pathname}
