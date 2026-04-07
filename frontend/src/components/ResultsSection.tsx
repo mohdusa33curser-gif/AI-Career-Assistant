@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, useRef, useEffect, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type {
   AnalysisResponse,
@@ -580,11 +580,18 @@ function SkillsDetailModal({
   groupedSkills: Array<{ title: string; skills: string[] }>;
   onClose: () => void;
 }) {
+  const maxSkills = groupedSkills.reduce(
+    (max, g) => Math.max(max, g.skills.length),
+    1
+  );
+
   return (
     <AnimatePresence>
       <motion.div
         className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm"
-        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
         onClick={onClose}
       >
         <motion.div
@@ -595,13 +602,25 @@ function SkillsDetailModal({
           className="max-h-[88vh] w-full max-w-3xl overflow-y-auto rounded-3xl border border-white/10 bg-slate-950 p-6 shadow-2xl"
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="flex items-start justify-between gap-4 mb-6">
+          <div className="mb-6 flex items-start justify-between gap-4">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-400/80">CV Strengths</p>
-              <h3 className="mt-2 text-2xl font-semibold text-white">Verified skill groups</h3>
-              <p className="mt-1 text-sm text-slate-400">Grouped by domain for faster scanning.</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-400/80">
+                CV Strengths
+              </p>
+              <h3 className="mt-2 text-2xl font-semibold text-white">
+                Verified skill groups
+              </h3>
+              <p className="mt-1 text-sm text-slate-400">
+                Grouped by domain for faster scanning.
+              </p>
             </div>
-            <button type="button" onClick={onClose} className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-white transition hover:bg-white/10">Close</button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-white transition hover:bg-white/10"
+            >
+              Close
+            </button>
           </div>
 
           {groupedSkills.length === 0 ? (
@@ -613,18 +632,41 @@ function SkillsDetailModal({
               {groupedSkills.map((group, index) => (
                 <motion.div
                   key={group.title}
-                  initial={{ opacity: 0, y: 12 }}
+                  initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.24, delay: index * 0.03 }}
-                  className="rounded-2xl border border-white/10 bg-black/10 p-4"
+                  transition={{ duration: 0.2, delay: index * 0.03 }}
+                  className="rounded-2xl border border-white/10 bg-black/10 p-5"
                 >
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <h3 className="text-sm font-semibold text-white">{group.title}</h3>
-                    <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-slate-300">{group.skills.length}</span>
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="h-2 w-2 rounded-full bg-emerald-400" />
+                      <h3 className="text-sm font-semibold text-white">
+                        {group.title}
+                      </h3>
+                    </div>
+                    <span className="text-xs text-slate-400">
+                      {group.skills.length} skills
+                    </span>
                   </div>
+
+                  <div className="mb-4 h-1 overflow-hidden rounded-full bg-white/10">
+                    <div
+                      className="h-full rounded-full bg-emerald-500/50"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          (group.skills.length / maxSkills) * 100
+                        )}%`,
+                      }}
+                    />
+                  </div>
+
                   <div className="flex flex-wrap gap-2">
                     {group.skills.map((skill) => (
-                      <span key={`${group.title}-${skill}`} className="inline-flex rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-slate-100">
+                      <span
+                        key={`${group.title}-${skill}`}
+                        className="inline-flex rounded-lg border border-white/10 bg-white/[0.06] px-3 py-1.5 text-[13px] font-medium text-slate-100"
+                      >
                         {skill}
                       </span>
                     ))}
@@ -652,7 +694,9 @@ function GapsDetailModal({
     <AnimatePresence>
       <motion.div
         className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm"
-        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
         onClick={onClose}
       >
         <motion.div
@@ -663,13 +707,25 @@ function GapsDetailModal({
           className="max-h-[88vh] w-full max-w-3xl overflow-y-auto rounded-3xl border border-white/10 bg-slate-950 p-6 shadow-2xl"
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="flex items-start justify-between gap-4 mb-6">
+          <div className="mb-6 flex items-start justify-between gap-4">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-rose-400/80">Priority Gaps</p>
-              <h3 className="mt-2 text-2xl font-semibold text-white">What blocks stronger matches</h3>
-              <p className="mt-1 text-sm text-slate-400">Recurring weaknesses with the highest role impact.</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-rose-400/80">
+                Priority Gaps
+              </p>
+              <h3 className="mt-2 text-2xl font-semibold text-white">
+                What blocks stronger matches
+              </h3>
+              <p className="mt-1 text-sm text-slate-400">
+                Recurring weaknesses with the highest role impact.
+              </p>
             </div>
-            <button type="button" onClick={onClose} className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-white transition hover:bg-white/10">Close</button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-white transition hover:bg-white/10"
+            >
+              Close
+            </button>
           </div>
 
           {gaps.length === 0 ? (
@@ -677,11 +733,42 @@ function GapsDetailModal({
               No major recurring gaps were detected in your strongest role matches.
             </div>
           ) : (
-            <div className="space-y-3">
-              {gaps.slice(0, 5).map((gap, index) => (
-                <GapCard key={`${gap.skill}-${index}`} gap={gap} index={index} />
-              ))}
-            </div>
+            <>
+              <div className="mb-4 grid grid-cols-3 gap-3">
+                <div className="rounded-xl border border-rose-500/20 bg-rose-500/[0.08] p-3 text-center">
+                  <p className="text-xl font-bold text-rose-300">
+                    {gaps.filter((g) => g.importance === "High").length}
+                  </p>
+                  <p className="mt-1 text-[10px] uppercase tracking-wider text-rose-400/70">
+                    High priority
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.08] p-3 text-center">
+                  <p className="text-xl font-bold text-amber-300">
+                    {gaps.filter((g) => g.importance === "Moderate").length}
+                  </p>
+                  <p className="mt-1 text-[10px] uppercase tracking-wider text-amber-400/70">
+                    Moderate
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-sky-500/20 bg-sky-500/[0.08] p-3 text-center">
+                  <p className="text-xl font-bold text-sky-300">
+                    {gaps.filter((g) => g.importance === "Low").length}
+                  </p>
+                  <p className="mt-1 text-[10px] uppercase tracking-wider text-sky-400/70">
+                    Low priority
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                {gaps.map((gap, index) => (
+                  <GapCard key={`${gap.skill}-${index}`} gap={gap} index={index} />
+                ))}
+              </div>
+            </>
           )}
         </motion.div>
       </motion.div>
@@ -867,12 +954,187 @@ function ActionPlanPanel({
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
+function SkillsSidebarWidget({
+  groupedSkills,
+  onClick,
+}: {
+  groupedSkills: Array<{ title: string; skills: string[] }>;
+  onClick: () => void;
+}) {
+  const totalSkills = groupedSkills.reduce((sum, g) => sum + g.skills.length, 0);
+
+  return (
+    <motion.button
+      type="button"
+      onClick={onClick}
+      initial={{ opacity: 0, x: -12 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ duration: 0.3, delay: 0.1 }}
+      className="group w-full rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-left transition hover:border-emerald-500/25 hover:bg-emerald-500/[0.04]"
+    >
+      {/* Icon */}
+      <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-emerald-500/20 bg-emerald-500/10 mb-3">
+        <svg viewBox="0 0 16 16" className="h-4 w-4 text-emerald-400" fill="currentColor">
+          <circle cx="3" cy="3" r="1.5"/><circle cx="8" cy="3" r="1.5"/><circle cx="13" cy="3" r="1.5"/>
+          <circle cx="3" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="13" cy="8" r="1.5"/>
+          <circle cx="3" cy="13" r="1.5"/><circle cx="8" cy="13" r="1.5"/><circle cx="13" cy="13" r="1.5"/>
+        </svg>
+      </div>
+
+      <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-400 mb-1">CV Strengths</p>
+      <p className="text-2xl font-bold text-white leading-none mb-0.5">{totalSkills}</p>
+      <p className="text-[11px] text-slate-400 mb-4">verified skills</p>
+
+      {/* Domain list */}
+      <div className="space-y-2">
+        {groupedSkills.slice(0, 5).map((group) => (
+          <div key={group.title} className="flex items-center justify-between gap-1">
+            <span className="text-[11px] text-slate-400 truncate leading-tight">{group.title.replace(" & ", " & ").split(" ").slice(0, 2).join(" ")}</span>
+            <span className="shrink-0 text-[11px] font-semibold text-emerald-400">{group.skills.length}</span>
+          </div>
+        ))}
+        {groupedSkills.length > 5 && (
+          <p className="text-[11px] text-slate-500">+{groupedSkills.length - 5} more</p>
+        )}
+      </div>
+
+      {/* Mini bar chart */}
+      <div className="mt-4 flex items-end gap-0.5 h-7">
+        {groupedSkills.slice(0, 6).map((group) => {
+          const maxCount = Math.max(...groupedSkills.map(g => g.skills.length));
+          const heightPct = maxCount > 0 ? (group.skills.length / maxCount) * 100 : 0;
+          return (
+            <div
+              key={group.title}
+              className="flex-1 rounded-sm bg-emerald-500/25 transition-all group-hover:bg-emerald-500/40"
+              style={{ height: `${Math.max(20, heightPct)}%` }}
+            />
+          );
+        })}
+      </div>
+
+      <p className="mt-3 text-[10px] text-slate-500 group-hover:text-emerald-400/60 transition">
+        Tap to explore →
+      </p>
+    </motion.button>
+  );
+}
+
+function GapsSidebarWidget({
+  gaps,
+  onClick,
+}: {
+  gaps: Gap[];
+  onClick: () => void;
+}) {
+  const highCount = gaps.filter(g => g.importance === "High").length;
+  const modCount  = gaps.filter(g => g.importance === "Moderate").length;
+  const lowCount  = gaps.filter(g => g.importance === "Low").length;
+
+  return (
+    <motion.button
+      type="button"
+      onClick={onClick}
+      initial={{ opacity: 0, x: 12 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ duration: 0.3, delay: 0.15 }}
+      className="group w-full rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-left transition hover:border-rose-500/25 hover:bg-rose-500/[0.04]"
+    >
+      {/* Icon */}
+      <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-rose-500/20 bg-rose-500/10 mb-3">
+        <svg viewBox="0 0 16 16" className="h-4 w-4 text-rose-400" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <path d="M8 2v5M8 10.5v.5" strokeLinecap="round"/>
+          <path d="M8 14A6 6 0 108 2a6 6 0 000 12z"/>
+        </svg>
+      </div>
+
+      <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-rose-400 mb-1">Priority Gaps</p>
+      <p className="text-2xl font-bold text-white leading-none mb-0.5">{gaps.length}</p>
+      <p className="text-[11px] text-slate-400 mb-4">skills to address</p>
+
+      {/* Severity breakdown */}
+      <div className="space-y-2.5">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-rose-400" />
+            <span className="text-[11px] text-slate-400">High</span>
+          </div>
+          <span className="text-[11px] font-semibold text-rose-300">{highCount}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+            <span className="text-[11px] text-slate-400">Moderate</span>
+          </div>
+          <span className="text-[11px] font-semibold text-amber-300">{modCount}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-sky-400" />
+            <span className="text-[11px] text-slate-400">Low</span>
+          </div>
+          <span className="text-[11px] font-semibold text-sky-300">{lowCount}</span>
+        </div>
+      </div>
+
+      {/* Stacked severity bar */}
+      <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/10 flex">
+        {highCount > 0 && (
+          <div
+            className="h-full bg-rose-500/60"
+            style={{ width: `${(highCount / gaps.length) * 100}%` }}
+          />
+        )}
+        {modCount > 0 && (
+          <div
+            className="h-full bg-amber-500/60"
+            style={{ width: `${(modCount / gaps.length) * 100}%` }}
+          />
+        )}
+        {lowCount > 0 && (
+          <div
+            className="h-full bg-sky-500/60"
+            style={{ width: `${(lowCount / gaps.length) * 100}%` }}
+          />
+        )}
+      </div>
+
+      {/* Top gap names */}
+      <div className="mt-4 space-y-1.5">
+        {gaps.slice(0, 3).map((gap) => (
+          <p key={gap.skill} className="text-[11px] text-slate-400 truncate leading-tight">
+            · {gap.skill}
+          </p>
+        ))}
+        {gaps.length > 3 && (
+          <p className="text-[11px] text-slate-500">+{gaps.length - 3} more</p>
+        )}
+      </div>
+
+      <p className="mt-3 text-[10px] text-slate-500 group-hover:text-rose-400/60 transition">
+        Tap to explore →
+      </p>
+    </motion.button>
+  );
+}
 
 export function ResultsSection({ analysis }: { analysis: AnalysisResponse }) {
   const [selectedJob, setSelectedJob] = useState<JobMatch | null>(null);
   const [showAllMatches, setShowAllMatches] = useState(false);
   const [showSkillsModal, setShowSkillsModal] = useState(false);
-  const [showGapsModal, setShowGapsModal]   = useState(false);
+  const [showGapsModal, setShowGapsModal] = useState(false);
+  const [sidebarsVisible, setSidebarsVisible] = useState(true);
+
+  const sidebarRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      ([entry]) => setSidebarsVisible(entry.isIntersecting),
+      { threshold: 0.1 }
+    );
+    if (sidebarRef.current) observer.observe(sidebarRef.current);
+    return () => observer.disconnect();
+  }, []);
 
   const groupedSkills = useMemo(
     () => groupDetectedSkills(analysis.extractedSkills ?? []),
@@ -892,55 +1154,86 @@ export function ResultsSection({ analysis }: { analysis: AnalysisResponse }) {
     <div className="w-full overflow-x-hidden px-1 py-3 md:px-2 md:py-4">
       <div className="space-y-3">
 
-        {/* 1. Profile overview — TOP, no analysisMessage before it */}
+        {/* 1. Overview */}
         <OverviewHeader analysis={analysis} readinessBand={readinessBand} />
 
-        {/* 2. Compact widgets row: Skills + Gaps side by side */}
-        <div className="grid gap-3 md:grid-cols-2">
-          <SkillsCompactWidget
-            groupedSkills={groupedSkills}
-            onClick={() => setShowSkillsModal(true)}
-          />
-          <GapsCompactWidget
-            gaps={analysis.gaps}
-            onClick={() => setShowGapsModal(true)}
-          />
+        {/* 2. Three-column layout: Skills | Top Matches | Gaps */}
+        <div ref={sidebarRef} className="flex gap-3 items-start">
+
+          {/* LEFT sidebar — CV Strengths */}
+          <div className="hidden xl:flex w-[168px] shrink-0">
+            <SkillsSidebarWidget
+              groupedSkills={groupedSkills}
+              onClick={() => setShowSkillsModal(true)}
+            />
+          </div>
+
+          {/* CENTER — Top Matches */}
+          <div
+            className={`flex-1 min-w-0 transition-all duration-500 ${
+              sidebarsVisible ? "" : "xl:max-w-[860px] xl:mx-auto"
+            }`}
+          >
+            <Panel className="overflow-hidden p-4 md:p-5">
+              <div className="flex flex-wrap items-end justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <SectionHeading
+                    eyebrow="Top matches"
+                    title="Best role matches"
+                    subtitle="The matching engine remains the core of the product, so the best-fitting roles appear first and take the main visual focus."
+                  />
+                </div>
+                {/* Mobile: show compact widgets inline */}
+                <div className="flex xl:hidden gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowSkillsModal(true)}
+                    className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300 transition hover:bg-emerald-500/20"
+                  >
+                    Skills ↗
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowGapsModal(true)}
+                    className="rounded-full border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300 transition hover:bg-rose-500/20"
+                  >
+                    Gaps ↗
+                  </button>
+                </div>
+                {analysis.topMatches.length > 3 ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllMatches((prev) => !prev)}
+                    className="shrink-0 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/10"
+                  >
+                    {showAllMatches ? "Show fewer roles" : `Show all ${analysis.topMatches.length} roles`}
+                  </button>
+                ) : null}
+              </div>
+              <div className="mt-5 grid gap-5">
+                {topMatchesToShow.length === 0 ? (
+                  <div className="rounded-2xl border border-white/10 bg-black/10 p-5 text-sm leading-6 text-slate-300">
+                    No ranked job matches were produced for this run.
+                  </div>
+                ) : (
+                  topMatchesToShow.map((job, index) => (
+                    <JobMatchCard key={job.id} job={job} index={index} onOpenInsight={setSelectedJob} />
+                  ))
+                )}
+              </div>
+            </Panel>
+          </div>
+
+          {/* RIGHT sidebar — Priority Gaps */}
+          <div className="hidden xl:flex w-[168px] shrink-0">
+            <GapsSidebarWidget
+              gaps={analysis.gaps}
+              onClick={() => setShowGapsModal(true)}
+            />
+          </div>
         </div>
 
-        {/* 3. Top matches — unchanged */}
-        <Panel className="overflow-hidden p-4 md:p-5" delay={0.08}>
-          <div className="flex flex-wrap items-end justify-between gap-4">
-            <div className="min-w-0 flex-1">
-              <SectionHeading
-                eyebrow="Top matches"
-                title="Best role matches"
-                subtitle="The matching engine remains the core of the product, so the best-fitting roles appear first and take the main visual focus."
-              />
-            </div>
-            {analysis.topMatches.length > 3 ? (
-              <button
-                type="button"
-                onClick={() => setShowAllMatches((prev) => !prev)}
-                className="shrink-0 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/10"
-              >
-                {showAllMatches ? "Show fewer roles" : `Show all ${analysis.topMatches.length} roles`}
-              </button>
-            ) : null}
-          </div>
-          <div className="mt-5 grid gap-5">
-            {topMatchesToShow.length === 0 ? (
-              <div className="rounded-2xl border border-white/10 bg-black/10 p-5 text-sm leading-6 text-slate-300">
-                No ranked job matches were produced for this run.
-              </div>
-            ) : (
-              topMatchesToShow.map((job, index) => (
-                <JobMatchCard key={job.id} job={job} index={index} onOpenInsight={setSelectedJob} />
-              ))
-            )}
-          </div>
-        </Panel>
-
-        {/* 4. Action plan — last, styled like OverviewHeader */}
+        {/* 3. Action plan */}
         <ActionPlanPanel
           roadmap={analysis.learningRoadmap}
           recommendations={analysis.recommendations}
@@ -950,14 +1243,12 @@ export function ResultsSection({ analysis }: { analysis: AnalysisResponse }) {
 
       {/* Modals */}
       <RoleInsightModal job={selectedJob} onClose={() => setSelectedJob(null)} />
-
       {showSkillsModal && (
         <SkillsDetailModal
           groupedSkills={groupedSkills}
           onClose={() => setShowSkillsModal(false)}
         />
       )}
-
       {showGapsModal && (
         <GapsDetailModal
           gaps={analysis.gaps}
