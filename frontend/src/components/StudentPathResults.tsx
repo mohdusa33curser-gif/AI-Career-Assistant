@@ -49,48 +49,6 @@ function Panel({
   );
 }
 
-function SectionHeading({
-  eyebrow,
-  title,
-  subtitle,
-}: {
-  eyebrow?: string;
-  title: string;
-  subtitle?: string;
-}) {
-  return (
-    <div className="space-y-2">
-      {eyebrow ? (
-        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-accent/80">
-          {eyebrow}
-        </p>
-      ) : null}
-      <h2 className="text-2xl font-semibold text-white md:text-3xl">{title}</h2>
-      {subtitle ? (
-        <p className="max-w-3xl text-sm leading-7 text-slate-300">{subtitle}</p>
-      ) : null}
-    </div>
-  );
-}
-
-function MetricTile({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: string;
-  hint?: string | null;
-}) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-black/10 p-4">
-      <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">{label}</p>
-      <p className="mt-2 text-lg font-semibold text-white leading-snug">{value}</p>
-      {hint ? <p className="mt-2 text-sm leading-6 text-slate-300">{hint}</p> : null}
-    </div>
-  );
-}
-
 function TrackCard({
   track,
   selected,
@@ -104,56 +62,40 @@ function TrackCard({
     <button
       type="button"
       onClick={onClick}
-      className={`w-full rounded-3xl border p-5 text-left transition ${
+      className={`w-full rounded-2xl border p-4 text-left transition ${
         selected
-          ? "border-accent/40 bg-accent/10 shadow-[0_0_0_1px_rgba(56,189,248,0.18)]"
-          : "border-white/10 bg-white/[0.03] hover:bg-white/[0.05]"
+          ? "border-amber-500/40 bg-amber-500/10 shadow-[0_0_0_1px_rgba(245,158,11,0.18)]"
+          : "border-white/10 bg-white/[0.02] hover:bg-white/[0.04]"
       }`}
     >
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-accent/80">
-            Track
-          </p>
-          <h3 className="mt-2 text-xl font-semibold text-white">{track.name}</h3>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="truncate text-base font-semibold text-white">{track.name}</h3>
+          <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-400">{track.summary}</p>
         </div>
-
-        <div className="rounded-2xl border border-white/10 bg-black/10 px-4 py-3 text-center">
-          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Fit</p>
-          <p className="mt-1 text-2xl font-bold text-white">{pct(track.fitScore)}</p>
+        <div className="shrink-0 rounded-xl border border-white/10 bg-black/10 px-3 py-2 text-center">
+          <p className="text-[9px] uppercase tracking-wider text-slate-400">Fit</p>
+          <p className="text-lg font-bold text-white">{pct(track.fitScore)}</p>
         </div>
       </div>
 
-      <p className="mt-4 text-sm leading-6 text-slate-300">{track.summary}</p>
-
-      <div className="mt-5 grid gap-3 sm:grid-cols-2">
-        <div className="rounded-2xl border border-white/10 bg-black/10 p-4">
-          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Aligned strengths</p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {track.matchedSkills.slice(0, 4).map((skill) => (
-              <span
-                key={`${track.id}-match-${skill}`}
-                className="inline-flex rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200"
-              >
-                {skill}
-              </span>
-            ))}
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-white/10 bg-black/10 p-4">
-          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Main learning needs</p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {track.gapSkills.slice(0, 4).map((skill) => (
-              <span
-                key={`${track.id}-gap-${skill}`}
-                className="inline-flex rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-200"
-              >
-                {skill}
-              </span>
-            ))}
-          </div>
-        </div>
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {track.matchedSkills.slice(0, 4).map((skill) => (
+          <span
+            key={`${track.id}-m-${skill}`}
+            className="inline-flex rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-medium text-emerald-300"
+          >
+            {skill}
+          </span>
+        ))}
+        {track.gapSkills.slice(0, 2).map((skill) => (
+          <span
+            key={`${track.id}-g-${skill}`}
+            className="inline-flex rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-0.5 text-[11px] font-medium text-amber-300"
+          >
+            {skill}
+          </span>
+        ))}
       </div>
     </button>
   );
@@ -230,86 +172,72 @@ function buildTracks(analysis: AnalysisResponse): StudentTrack[] {
   });
 }
 
-function PathDetail({
-  track,
-}: {
-  track: StudentTrack;
-}) {
+function PathDetail({ track }: { track: StudentTrack }) {
   return (
-    <Panel className="p-5 md:p-6" delay={0.12}>
-      <SectionHeading
-        eyebrow="Selected track"
-        title={`${track.name} path explorer`}
-        subtitle="Where you fit in this path, what roles live inside it, and what to learn next."
-      />
-
-      <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricTile
-          label="Path fit"
-          value={pct(track.fitScore)}
-          hint="Estimated fit from your current CV evidence."
-        />
-        <MetricTile
-          label="Confidence"
-          value={pct(track.confidencePercent)}
-          hint="How strongly the system sees this path as suitable."
-        />
-        <MetricTile
-          label="Roles in this path"
-          value={String(track.roleTitles.length)}
-          hint="Example roles aligned with this direction."
-        />
-        <MetricTile
-          label="Learning needs"
-          value={String(track.gapSkills.length)}
-          hint="Skills that would unlock stronger readiness."
-        />
+    <Panel className="p-5 md:p-6" delay={0.1}>
+      {/* Header with fit metrics */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-accent/80">
+            Selected track
+          </p>
+          <h2 className="mt-1.5 text-2xl font-semibold text-white">{track.name}</h2>
+          <p className="mt-1.5 max-w-2xl text-sm leading-6 text-slate-300">{track.summary}</p>
+        </div>
+        <div className="flex shrink-0 gap-3">
+          <div className="rounded-xl border border-white/10 bg-black/10 px-4 py-2.5 text-center">
+            <p className="text-[10px] uppercase tracking-wider text-slate-400">Path fit</p>
+            <p className="mt-0.5 text-xl font-bold text-white">{pct(track.fitScore)}</p>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-black/10 px-4 py-2.5 text-center">
+            <p className="text-[10px] uppercase tracking-wider text-slate-400">Confidence</p>
+            <p className="mt-0.5 text-xl font-bold text-white">{pct(track.confidencePercent)}</p>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-black/10 px-4 py-2.5 text-center">
+            <p className="text-[10px] uppercase tracking-wider text-slate-400">Roles</p>
+            <p className="mt-0.5 text-xl font-bold text-white">{track.roleTitles.length}</p>
+          </div>
+        </div>
       </div>
 
-      <div className="mt-8 grid gap-6 xl:grid-cols-[1fr_1fr]">
-        <div className="rounded-2xl border border-white/10 bg-black/10 p-5">
-          <h3 className="text-lg font-semibold text-white">Why this path fits you</h3>
-          <p className="mt-3 text-sm leading-7 text-slate-300">{track.summary}</p>
-
-          <div className="mt-5">
-            <p className="text-sm font-medium text-slate-200">Existing aligned strengths</p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {track.matchedSkills.slice(0, 8).map((skill) => (
-                <span
-                  key={`${track.id}-strong-${skill}`}
-                  className="inline-flex rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-sm font-medium text-emerald-200"
-                >
-                  {skill}
-                </span>
-              ))}
-            </div>
+      {/* Main content: 2 columns */}
+      <div className="mt-5 grid gap-4 xl:grid-cols-2">
+        {/* Aligned strengths */}
+        <div className="rounded-2xl border border-white/10 bg-black/10 p-4">
+          <p className="text-sm font-semibold text-slate-100">Aligned strengths</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {track.matchedSkills.slice(0, 10).map((skill) => (
+              <span
+                key={`${track.id}-strong-${skill}`}
+                className="inline-flex rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200"
+              >
+                {skill}
+              </span>
+            ))}
           </div>
         </div>
 
-        <div className="rounded-2xl border border-white/10 bg-black/10 p-5">
-          <h3 className="text-lg font-semibold text-white">What you should learn next</h3>
-
+        {/* What to learn next */}
+        <div className="rounded-2xl border border-white/10 bg-black/10 p-4">
+          <p className="text-sm font-semibold text-slate-100">What to learn next</p>
           {track.roadmap.length === 0 ? (
-            <p className="mt-4 text-sm leading-7 text-slate-300">
-              No track-specific roadmap items were detected yet. Start by reinforcing the gaps below.
+            <p className="mt-3 text-xs text-slate-400">
+              No track-specific roadmap items detected. Reinforce the gaps listed below.
             </p>
           ) : (
-            <div className="mt-4 space-y-4">
-              {track.roadmap.map((item, index) => (
+            <div className="mt-3 space-y-2.5">
+              {track.roadmap.slice(0, 3).map((item, index) => (
                 <div
                   key={`${track.id}-roadmap-${item.skill}-${index}`}
-                  className="rounded-2xl border border-white/10 bg-white/[0.03] p-4"
+                  className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5"
                 >
-                  <div className="flex items-center justify-between gap-3">
-                    <h4 className="text-base font-semibold text-white">{item.skill}</h4>
-                    <span className="rounded-full border border-accent/20 bg-accent/10 px-3 py-1 text-xs font-semibold text-accent">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-semibold text-white">{item.skill}</span>
+                    <span className="rounded-full border border-accent/20 bg-accent/10 px-2.5 py-0.5 text-[10px] font-semibold text-accent">
                       {item.priority}
                     </span>
                   </div>
-                  <p className="mt-3 text-sm leading-6 text-slate-300">{item.reason}</p>
-                  <p className="mt-2 text-xs uppercase tracking-[0.16em] text-slate-400">
-                    {item.estimatedImpact}
-                  </p>
+                  <p className="mt-1 text-xs leading-5 text-slate-400">{item.reason}</p>
                 </div>
               ))}
             </div>
@@ -317,28 +245,34 @@ function PathDetail({
         </div>
       </div>
 
-      <div className="mt-8 grid gap-6 xl:grid-cols-[1fr_1fr]">
-        <div className="rounded-2xl border border-white/10 bg-black/10 p-5">
-          <h3 className="text-lg font-semibold text-white">Roles this path can grow into</h3>
-          <div className="mt-4 grid gap-3">
+      {/* Bottom: roles + gaps */}
+      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+        {/* Roles */}
+        <div className="rounded-2xl border border-white/10 bg-black/10 p-4">
+          <p className="text-sm font-semibold text-slate-100">
+            Roles in this path{" "}
+            <span className="font-normal text-slate-500">({track.roleTitles.length})</span>
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
             {track.roleTitles.map((role, index) => (
-              <div
+              <span
                 key={`${track.id}-role-${role}-${index}`}
-                className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-medium text-slate-100"
+                className="inline-flex rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-200"
               >
                 {role}
-              </div>
+              </span>
             ))}
           </div>
         </div>
 
-        <div className="rounded-2xl border border-white/10 bg-black/10 p-5">
-          <h3 className="text-lg font-semibold text-white">Skills to close first</h3>
-          <div className="mt-4 flex flex-wrap gap-2">
-            {track.gapSkills.slice(0, 10).map((skill) => (
+        {/* Skills to close */}
+        <div className="rounded-2xl border border-white/10 bg-black/10 p-4">
+          <p className="text-sm font-semibold text-slate-100">Skills to close first</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {track.gapSkills.slice(0, 12).map((skill) => (
               <span
-                key={`${track.id}-skill-gap-${skill}`}
-                className="inline-flex rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-sm font-medium text-amber-200"
+                key={`${track.id}-gap-${skill}`}
+                className="inline-flex rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-200"
               >
                 {skill}
               </span>
@@ -372,52 +306,41 @@ export default function StudentPathResults({
     tracks.find((track) => track.id === selectedTrackId) ?? initialTrack;
 
   return (
-    <div className="space-y-6">
-      <Panel className="p-5 md:p-6" delay={0.02}>
-        <SectionHeading
-          eyebrow="Student path overview"
-          title="Choose a path before you choose a job"
-          subtitle="This interface is built for students. Instead of ranking jobs first, it turns your CV into possible directions, then shows what to learn to move into each path."
-        />
+    <div className="space-y-4">
+      {/* Compact metrics strip */}
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.28 }}
+        className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-3"
+      >
+        {[
+          { label: "Primary path", value: analysis.careerPath?.primaryPath ?? "Unknown" },
+          { label: "Confidence", value: pct(analysis.careerPath?.confidencePercent ?? 0) },
+          { label: "Entry role", value: analysis.nextRole?.currentBestFit ?? "Unknown" },
+          { label: "Main gap", value: analysis.insightSummary?.mainGap ?? "—" },
+        ].map((stat, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <span className="text-xs text-slate-500">{stat.label}:</span>
+            <span className="text-sm font-semibold text-white">{stat.value}</span>
+          </div>
+        ))}
+      </motion.div>
 
-        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <MetricTile
-            label="Primary path"
-            value={analysis.careerPath?.primaryPath ?? "Unknown"}
-            hint={analysis.careerPath?.summary ?? null}
-          />
-          <MetricTile
-            label="Confidence"
-            value={pct(analysis.careerPath?.confidencePercent ?? 0)}
-            hint="How strongly your current CV supports this direction."
-          />
-          <MetricTile
-            label="Suggested entry role"
-            value={analysis.nextRole?.currentBestFit ?? "Unknown"}
-            hint="A realistic first role related to your current profile."
-          />
-          <MetricTile
-            label="Main gap"
-            value={analysis.insightSummary?.mainGap ?? "No major gap"}
-            hint="The most repeated weakness across your strongest matching directions."
-          />
-        </div>
-      </Panel>
-
-      <div className="grid gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
-        <Panel className="h-fit p-5 md:p-6" delay={0.08}>
-          <SectionHeading
-            eyebrow="Available paths"
-            title="Recommended paths"
-            subtitle="Select a path to inspect it in detail."
-          />
+      {/* Track selector + detail */}
+      <div className="grid gap-5 xl:grid-cols-[340px_minmax(0,1fr)]">
+        <Panel className="h-fit p-5" delay={0.06}>
+          <div className="space-y-1">
+            <h2 className="text-xl font-semibold text-white">Recommended paths</h2>
+            <p className="text-xs text-slate-400">Select a path to inspect it in detail.</p>
+          </div>
 
           {tracks.length === 0 ? (
-            <div className="mt-6 rounded-2xl border border-white/10 bg-black/10 p-5 text-sm leading-6 text-slate-300">
+            <div className="mt-5 rounded-2xl border border-white/10 bg-black/10 p-4 text-sm leading-6 text-slate-300">
               No path suggestions were produced from this CV.
             </div>
           ) : (
-            <div className="mt-6 grid gap-4">
+            <div className="mt-4 space-y-3">
               {tracks.map((track) => (
                 <TrackCard
                   key={track.id}

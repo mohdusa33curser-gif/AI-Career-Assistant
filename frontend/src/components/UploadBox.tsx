@@ -118,7 +118,7 @@ export function UploadBox() {
         }}
         onDrop={onDrop}
         className={cn(
-          "relative flex min-h-[200px] cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed transition-colors",
+          "relative flex min-h-[150px] cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed transition-colors",
           dragOver ? "border-accent bg-accent/5" : "border-white/15 bg-white/[0.02]",
         )}
         onKeyDown={(e) => {
