@@ -298,7 +298,7 @@ export function Home() {
                 </h1>
 
                 <p className="mt-5 text-lg leading-8 text-slate-400"> {/* ✅ text-base → text-lg */}
-                  Upload your PDF resume. We detect skills against the live job catalog and surface role matches, skill gaps, and next steps — instantly.
+                  Upload your CV. We analyze your skills against real job requirements and return precise role matches, identified gaps, and clear next steps
                 </p>
 
                 <div className="mt-10 grid grid-cols-3 gap-4"> {/* ✅ mt-8 → mt-10, gap-3 → gap-4 */}
