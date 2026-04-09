@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 from collections import Counter
@@ -29,6 +30,8 @@ from skill_core import (
     SKILL_EXTRACTION_BLOCKLIST_LOWER,
     parse_core_skills_raw,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -443,12 +446,115 @@ def vocabulary_for_cv_extraction(jobs: list[JobRecord]) -> frozenset[str]:
     return frozenset(s for s in collect_canonical_vocabulary(jobs) if s not in SKILL_EXTRACTION_BLOCKLIST_LOWER)
 
 
+def _format_db_salary_range(salary_min: int | None, salary_max: int | None) -> str:
+    if salary_min is not None and salary_max is not None:
+        return f"{salary_min} - {salary_max}"
+    if salary_min is not None:
+        return str(salary_min)
+    if salary_max is not None:
+        return str(salary_max)
+    return ""
+
+
+def _orm_job_to_job_record(orm_job: Any) -> JobRecord:
+    """Map a persisted ORM ``Job`` (with ``job_skills`` loaded) to a ``JobRecord``."""
+    from models.models import JobSkill as OrmJobSkill
+
+    links: list[OrmJobSkill] = sorted(
+        orm_job.job_skills,
+        key=lambda js: (js.skill_id, js.id),
+    )
+    core_chunks: list[str] = []
+    priority_chunks: list[str] = []
+    for js in links:
+        skill_name = clean_optional_text(js.skill.name if js.skill is not None else "")
+        if not skill_name:
+            continue
+        core_chunks.append(skill_name)
+        pl_raw = clean_optional_text(js.priority_level) or "Moderate"
+        priority_chunks.append(f"{skill_name}:{pl_raw}")
+
+    core_skills_raw = "|".join(core_chunks)
+    skill_priority_raw = "|".join(priority_chunks)
+    parsed = parse_skill_priority_pairs(skill_priority_raw)
+
+    job_title = clean_optional_text(orm_job.title)
+    category = clean_optional_text(orm_job.category)
+    description = clean_optional_text(orm_job.description)
+    ui_description = description
+    salary_range = _format_db_salary_range(orm_job.salary_min, orm_job.salary_max)
+    job_trend = ""
+
+    core_skills_canonical, description_skill_hints, merged_skill_profile = build_job_skill_profile(
+        job_title=job_title,
+        category=category,
+        parsed_skills=parsed,
+        core_skills_raw=core_skills_raw,
+        description=description,
+    )
+
+    n_merged = len(merged_skill_profile.weighted_skills)
+    final_skill_count = n_merged if n_merged else None
+
+    return JobRecord(
+        job_title=job_title,
+        category=category,
+        description=description,
+        ui_description=ui_description,
+        core_skills_raw=core_skills_raw,
+        skill_priority_raw=skill_priority_raw,
+        parsed_skills=dict(merged_skill_profile.weighted_skills),
+        soft_skills=[],
+        education="",
+        experience="",
+        salary_range=salary_range,
+        job_trend=job_trend,
+        final_skill_count=final_skill_count,
+        source_row_index=int(orm_job.id),
+        core_skills_canonical=core_skills_canonical,
+        description_skill_hints=description_skill_hints,
+        merged_skill_profile=merged_skill_profile,
+    )
+
+
+def load_jobs_from_db() -> list[JobRecord]:
+    """
+    Load all jobs from PostgreSQL via ``JobService`` and map them to ``JobRecord``.
+
+    Returns an empty list when the database has no jobs or any error occurs.
+    """
+    from db.connection import SessionLocal
+    from services.job_service import JobService
+
+    session = SessionLocal()
+    try:
+        job_service = JobService()
+        orm_jobs: list[Any] = []
+        page = 1
+        while True:
+            batch = job_service.get_jobs_with_skills(session, page=page, limit=100)
+            if not batch:
+                break
+            orm_jobs.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+        if not orm_jobs:
+            return []
+        return [_orm_job_to_job_record(row) for row in orm_jobs]
+    except Exception as exc:
+        logger.warning("load_jobs_from_db failed: %s", exc)
+        return []
+    finally:
+        session.close()
+
+
 # ---------------------------------------------------------------------------
 # JobDatasetService
 # ---------------------------------------------------------------------------
 
 class JobDatasetService:
-    """Loads and caches ``JobRecord`` instances built from the validated CSV."""
+    """Loads and caches ``JobRecord`` rows from PostgreSQL when available, else the CSV."""
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -480,79 +586,31 @@ class JobDatasetService:
     def column_map(self) -> dict[str, str] | None:
         return self._column_map
 
-    def load_dataset(self) -> list[JobRecord]:
-        path = self._resolve_dataset_path()
-        self._resolved_dataset_path = path
-
-        validation = validate_jobs_dataset(path)
-        self._validation_warnings = list(validation.warnings)
-        self._column_map = dict(validation.column_map)
-        df = validation.dataframe
-        col = validation.column_map
-
-        jobs: list[JobRecord] = []
-
-        for row_index, (_, row) in enumerate(df.iterrows()):
-            sp_raw = clean_optional_text(row.get(col["Skill Priority Level"], ""))
-            parsed = parse_skill_priority_pairs(sp_raw)
-
-            soft_cell = clean_optional_text(row.get(col["Soft Skills"], ""))
-            soft_list = split_pipe_values(soft_cell) if soft_cell else []
-
-            fsc_raw = clean_optional_text(row.get(col["Final Skill Count"], ""))
-            final_count: int | None
-            if not fsc_raw:
-                final_count = None
-            else:
-                try:
-                    final_count = int(float(fsc_raw.replace(",", "")))
-                except ValueError:
-                    final_count = None
-
-            job_title = clean_optional_text(row.get(col["Job Title"], ""))
-            category = clean_optional_text(row.get(col["Category"], ""))
-            description = clean_optional_text(row.get(col["Description"], ""))
-            ui_description = clean_optional_text(row.get(col["UI Description"], ""))
-            core_skills_raw = clean_optional_text(row.get(col["Core Skills"], ""))
-            skill_priority_raw = sp_raw
-            education = clean_optional_text(row.get(col["Education"], ""))
-            experience = clean_optional_text(row.get(col["Experience"], ""))
-            salary_range = clean_optional_text(row.get(col["Salary Range"], ""))
-            job_trend = clean_optional_text(row.get(col["Job Trend"], ""))
-
-            core_skills_canonical, description_skill_hints, merged_skill_profile = build_job_skill_profile(
-                job_title=job_title,
-                category=category,
-                parsed_skills=parsed,
-                core_skills_raw=core_skills_raw,
-                description=description,
-            )
-
-            record = JobRecord(
-                job_title=job_title,
-                category=category,
-                description=description,
-                ui_description=ui_description,
-                core_skills_raw=core_skills_raw,
-                skill_priority_raw=skill_priority_raw,
-                parsed_skills=dict(merged_skill_profile.weighted_skills),
-                soft_skills=soft_list,
-                education=education,
-                experience=experience,
-                salary_range=salary_range,
-                job_trend=job_trend,
-                final_skill_count=final_count,
-                source_row_index=row_index,
-                core_skills_canonical=core_skills_canonical,
-                description_skill_hints=description_skill_hints,
-                merged_skill_profile=merged_skill_profile,
-            )
-            jobs.append(record)
-
+    def _finalize_loaded_jobs(
+        self,
+        jobs: list[JobRecord],
+        *,
+        resolved_path: Path,
+        validation_warnings: list[str],
+        column_map: dict[str, str] | None,
+    ) -> list[JobRecord]:
+        self._resolved_dataset_path = resolved_path
+        self._validation_warnings = list(validation_warnings)
+        self._column_map = dict(column_map) if column_map is not None else None
         self._jobs = jobs
         self._build_semantic_cache(jobs)
-        self._summary = self._compute_summary(path)
+        self._summary = self._compute_summary(resolved_path)
         return jobs
+
+    def load_dataset(self) -> list[JobRecord]:
+        db_jobs = load_jobs_from_db()
+        db_marker = self._backend_root() / "database"
+        return self._finalize_loaded_jobs(
+            db_jobs,
+            resolved_path=db_marker,
+            validation_warnings=[],
+            column_map=None,
+        )
 
     def _build_semantic_cache(self, jobs: list[JobRecord]) -> None:
         from matching import build_job_profile_text, encode_texts_to_embeddings
@@ -659,4 +717,5 @@ __all__ = [
     "vocabulary_for_cv_extraction",
     # service
     "JobDatasetService",
+    "load_jobs_from_db",
 ]
