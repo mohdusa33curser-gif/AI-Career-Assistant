@@ -12,6 +12,10 @@ export interface JobScoreBreakdown {
   weightedSkillPercent: number;
   exactOverlapPercent: number;
   categoryAlignmentPercent: number;
+  /** Phase-2 multi-factor signals – raw [0, 1] */
+  demandScore?: number;
+  salaryScore?: number;
+  experienceAlignmentScore?: number;
 }
 
 export interface JobMatch {
@@ -23,6 +27,10 @@ export interface JobMatch {
   missingSkills: string[];
   whyThisRole: string[];
   scoreBreakdown: JobScoreBreakdown;
+  /** Phase-2 multi-factor signals – raw [0, 1], optional for backward compat */
+  demandScore?: number;
+  salaryScore?: number;
+  experienceAlignmentScore?: number;
 }
 
 export interface Gap {
@@ -126,7 +134,15 @@ export interface AnalyzeSkillsTopJob {
     weighted_skill_percent?: number;
     exact_overlap_percent?: number;
     category_alignment_percent?: number;
+    /** Phase-2 signals – raw [0, 1] */
+    demand_score?: number;
+    salary_score?: number;
+    experience_alignment_score?: number;
   };
+  /** Phase-2 signals also exposed at top-level by backend */
+  demand_score?: number;
+  salary_score?: number;
+  experience_alignment_score?: number;
 }
 
 export interface AnalyzeSkillsRecommendation {

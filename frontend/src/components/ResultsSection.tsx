@@ -106,7 +106,15 @@ function MetricTile({ label, value, hint }: { label: string; value: string; hint
   );
 }
 
-function BreakdownBar({ label, value }: { label: string; value: number }) {
+function BreakdownBar({
+  label,
+  value,
+  colorClass = "bg-accent",
+}: {
+  label: string;
+  value: number;
+  colorClass?: string;
+}) {
   const safe = Math.max(0, Math.min(100, Number(value || 0)));
   return (
     <div className="space-y-2">
@@ -119,11 +127,19 @@ function BreakdownBar({ label, value }: { label: string; value: number }) {
           initial={{ width: 0 }}
           animate={{ width: `${safe}%` }}
           transition={{ duration: 0.55, ease: "easeOut" }}
-          className="h-full rounded-full bg-accent"
+          className={`h-full rounded-full ${colorClass}`}
         />
       </div>
     </div>
   );
+}
+
+/** Convert a raw [0,1] signal to a 0–100 display value safely. */
+function signalToPct(v: number | undefined): number | null {
+  if (v === undefined || v === null) return null;
+  const n = Number(v);
+  if (!isFinite(n)) return null;
+  return Math.round(Math.max(0, Math.min(1, n)) * 100);
 }
 
 const SKILL_GROUPS: Array<{ title: string; keywords: string[] }> = [
@@ -334,8 +350,76 @@ function RoleInsightModal({ job, onClose }: { job: JobMatch | null; onClose: () 
                   <BreakdownBar label="Skill coverage" value={job.scoreBreakdown.weightedSkillPercent} />
                   <BreakdownBar label="Exact overlap" value={job.scoreBreakdown.exactOverlapPercent} />
                   <BreakdownBar label="Category alignment" value={job.scoreBreakdown.categoryAlignmentPercent} />
+                  {job.scoreBreakdown.demandScore != null && (
+                    <BreakdownBar
+                      label="Market demand"
+                      value={job.scoreBreakdown.demandScore * 100}
+                      colorClass="bg-amber-400"
+                    />
+                  )}
+                  {job.scoreBreakdown.experienceAlignmentScore != null && (
+                    <BreakdownBar
+                      label="Experience fit"
+                      value={job.scoreBreakdown.experienceAlignmentScore * 100}
+                      colorClass="bg-sky-400"
+                    />
+                  )}
+                  {job.scoreBreakdown.salaryScore != null && (
+                    <BreakdownBar
+                      label="Salary signal"
+                      value={job.scoreBreakdown.salaryScore * 100}
+                      colorClass="bg-emerald-400"
+                    />
+                  )}
                 </div>
               </div>
+
+              {/* ── Phase-2: Ranking factor explanations ── */}
+              {(() => {
+                const lines: Array<{ dot: string; text: string }> = [];
+                const demand = job.scoreBreakdown.demandScore;
+                const expFit = job.scoreBreakdown.experienceAlignmentScore;
+                const salary = job.scoreBreakdown.salaryScore;
+
+                if (demand != null && demand >= 0.65)
+                  lines.push({
+                    dot: "bg-amber-400",
+                    text:
+                      demand >= 0.85
+                        ? "High market demand boosted this role's ranking."
+                        : "Solid market demand contributed to this recommendation.",
+                  });
+
+                if (expFit != null && expFit >= 0.75)
+                  lines.push({
+                    dot: "bg-sky-400",
+                    text:
+                      expFit >= 0.9
+                        ? "Experience level closely matches your profile."
+                        : "Your experience level aligns well with this role.",
+                  });
+
+                if (salary != null && salary >= 0.6)
+                  lines.push({
+                    dot: "bg-emerald-400",
+                    text: "Salary competitiveness contributed slightly to this recommendation.",
+                  });
+
+                if (lines.length === 0) return null;
+                return (
+                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                    <h4 className="text-base font-semibold text-white">Ranking factors</h4>
+                    <ul className="mt-4 space-y-3 text-sm leading-6 text-slate-300">
+                      {lines.map((l, i) => (
+                        <li key={i} className="flex gap-3">
+                          <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${l.dot}`} />
+                          <span>{l.text}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })()}
               <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
                 <h4 className="text-lg font-semibold text-white">Skill evidence</h4>
                 <div className="mt-5 space-y-5">
@@ -353,54 +437,81 @@ function RoleInsightModal({ job, onClose }: { job: JobMatch | null; onClose: () 
 }
 
 function JobMatchCard({ job, index, onOpenInsight }: { job: JobMatch; index: number; onOpenInsight: (job: JobMatch) => void }) {
-  const matched = job.skills.filter((s) => s.status === "matched");
-  const partial = job.skills.filter((s) => s.status === "partial");
-  const missing = job.skills.filter((s) => s.status === "missing");
+  const matched = job.skills.filter((s) => s.status === "matched").slice(0, 6);
+  const partial = job.skills.filter((s) => s.status === "partial").slice(0, 5);
+  const missing = job.skills.filter((s) => s.status === "missing").slice(0, 5);
+  const metrics = [
+    { label: "Semantic", value: job.scoreBreakdown.semanticMatchPercent },
+    { label: "Skills", value: job.scoreBreakdown.weightedSkillPercent },
+    { label: "Overlap", value: job.scoreBreakdown.exactOverlapPercent },
+    { label: "Category", value: job.scoreBreakdown.categoryAlignmentPercent },
+  ];
   return (
     <motion.article
-      initial={{ opacity: 0, y: 18 }}
+      initial={{ opacity: 0, y: 14 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, delay: index * 0.05 }}
-      className="rounded-3xl border border-white/10 bg-white/[0.03] p-6 shadow-[0_18px_50px_rgba(0,0,0,0.16)]"
+      transition={{ duration: 0.26, delay: index * 0.04 }}
+      className="flex flex-col rounded-2xl border border-white/10 bg-white/[0.03] p-4 shadow-[0_8px_28px_rgba(0,0,0,0.18)]"
     >
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
-          <span className="inline-flex rounded-full border border-accent/20 bg-accent/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-accent">{job.category}</span>
-          <h3 className="mt-3 text-2xl font-semibold text-white leading-snug">{job.title}</h3>
+      {/* Header */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <span className="inline-flex rounded-full border border-accent/20 bg-accent/10 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">{job.category}</span>
+          <h3 className="mt-1.5 text-[1.1rem] font-semibold text-white leading-snug">{job.title}</h3>
         </div>
-        <div className="min-w-[110px] rounded-2xl border border-white/10 bg-black/10 px-4 py-3 text-center">
-          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Match</p>
-          <p className="mt-1 text-3xl font-bold text-white">{pct(job.matchPercent)}</p>
-        </div>
-      </div>
-      <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-2xl border border-white/10 bg-black/10 p-4">
-          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Semantic</p>
-          <p className="mt-2 text-xl font-semibold text-white">{pct(job.scoreBreakdown.semanticMatchPercent)}</p>
-        </div>
-        <div className="rounded-2xl border border-white/10 bg-black/10 p-4">
-          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Skill coverage</p>
-          <p className="mt-2 text-xl font-semibold text-white">{pct(job.scoreBreakdown.weightedSkillPercent)}</p>
-        </div>
-        <div className="rounded-2xl border border-white/10 bg-black/10 p-4">
-          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Exact overlap</p>
-          <p className="mt-2 text-xl font-semibold text-white">{pct(job.scoreBreakdown.exactOverlapPercent)}</p>
-        </div>
-        <div className="rounded-2xl border border-white/10 bg-black/10 p-4">
-          <p className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Category fit</p>
-          <p className="mt-2 text-xl font-semibold text-white">{pct(job.scoreBreakdown.categoryAlignmentPercent)}</p>
+        <div className="shrink-0 rounded-xl border border-white/10 bg-black/15 px-3 py-1.5 text-center min-w-[68px]">
+          <p className="text-[9px] uppercase tracking-[0.16em] text-slate-400">Match</p>
+          <p className="text-[1.6rem] font-bold text-white leading-none mt-0.5">{pct(job.matchPercent)}</p>
         </div>
       </div>
-      <div className="mt-6 space-y-5">
-        <SkillGroup title="Strong match" skills={matched} />
-        <SkillGroup title="Needs strengthening" skills={partial} />
-        <SkillGroup title="Missing" skills={missing} />
+
+      {/* Compact metrics row */}
+      <div className="mt-3 grid grid-cols-4 gap-1.5">
+        {metrics.map(({ label, value }) => (
+          <div key={label} className="rounded-lg border border-white/10 bg-black/10 px-2 py-2 text-center">
+            <p className="text-[9px] text-slate-500 leading-tight truncate">{label}</p>
+            <p className="mt-0.5 text-[0.82rem] font-semibold text-white">{pct(value)}</p>
+          </div>
+        ))}
       </div>
-      <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-5">
-        <p className="text-sm text-slate-300">This role is explained through a detailed recommendation panel instead of repeating generic missing-skill text.</p>
-        <button type="button" onClick={() => onOpenInsight(job)} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/10">
-          <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-accent/20 text-xs text-accent">i</span>
-          View recommendation
+
+      {/* Skill groups — compact, capped */}
+      <div className="mt-3 space-y-2 flex-1">
+        {matched.length > 0 && (
+          <div>
+            <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-400/80">Strong match</p>
+            <div className="flex flex-wrap gap-1.5">
+              {matched.map((s) => <SkillBadge key={`m-${s.name}`} skill={s} />)}
+            </div>
+          </div>
+        )}
+        {partial.length > 0 && (
+          <div>
+            <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-400/80">Needs strengthening</p>
+            <div className="flex flex-wrap gap-1.5">
+              {partial.map((s) => <SkillBadge key={`p-${s.name}`} skill={s} />)}
+            </div>
+          </div>
+        )}
+        {missing.length > 0 && (
+          <div>
+            <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-rose-400/80">Missing</p>
+            <div className="flex flex-wrap gap-1.5">
+              {missing.map((s) => <SkillBadge key={`x-${s.name}`} skill={s} />)}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Primary CTA */}
+      <div className="mt-4 pt-3 border-t border-white/10">
+        <button
+          type="button"
+          onClick={() => onOpenInsight(job)}
+          className="w-full rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white shadow-[0_4px_20px_rgba(0,0,0,0.35)] transition hover:brightness-110 active:scale-[0.98] flex items-center justify-center gap-2"
+        >
+          View full recommendation
+          <span className="opacity-70 text-base leading-none">→</span>
         </button>
       </div>
     </motion.article>
@@ -681,7 +792,7 @@ function SkillsDetailModal({
   );
 }
 
-// ─── NEW: Full-detail modal for Gaps ─────────────────────────────────────────
+// ─── Full-detail modal for Gaps (redesigned) ─────────────────────────────────
 
 function GapsDetailModal({
   gaps,
@@ -690,85 +801,124 @@ function GapsDetailModal({
   gaps: Gap[];
   onClose: () => void;
 }) {
+  const highGaps = gaps.filter((g) => g.importance === "High").slice(0, 4);
+  const modGaps  = gaps.filter((g) => g.importance === "Moderate").slice(0, 3);
+  const total    = gaps.length;
+  const highCount = gaps.filter((g) => g.importance === "High").length;
+  const modCount  = gaps.filter((g) => g.importance === "Moderate").length;
+  const lowCount  = gaps.filter((g) => g.importance === "Low").length;
+
   return (
     <AnimatePresence>
       <motion.div
-        className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
+        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
         onClick={onClose}
       >
         <motion.div
-          initial={{ opacity: 0, y: 22, scale: 0.98 }}
+          initial={{ opacity: 0, y: 20, scale: 0.97 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 18, scale: 0.98 }}
-          transition={{ duration: 0.24 }}
-          className="max-h-[88vh] w-full max-w-3xl overflow-y-auto rounded-3xl border border-white/10 bg-slate-950 p-6 shadow-2xl"
+          exit={{ opacity: 0, y: 16, scale: 0.97 }}
+          transition={{ duration: 0.22 }}
+          className="max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-3xl border border-white/10 bg-slate-950 p-5 shadow-2xl"
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="mb-6 flex items-start justify-between gap-4">
+          {/* Header */}
+          <div className="flex items-start justify-between gap-4 mb-5">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-rose-400/80">
-                Priority Gaps
-              </p>
-              <h3 className="mt-2 text-2xl font-semibold text-white">
-                What blocks stronger matches
-              </h3>
-              <p className="mt-1 text-sm text-slate-400">
-                Recurring weaknesses with the highest role impact.
-              </p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-rose-400/80">Skill Gaps Overview</p>
+              <h3 className="mt-1 text-xl font-semibold text-white">What to close next</h3>
+              <p className="mt-0.5 text-xs text-slate-400">Recurring gaps across your top role matches, ranked by impact.</p>
             </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-white transition hover:bg-white/10"
-            >
+            <button type="button" onClick={onClose}
+              className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-white/10 shrink-0">
               Close
             </button>
           </div>
 
           {gaps.length === 0 ? (
-            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm leading-6 text-emerald-100">
-              No major recurring gaps were detected in your strongest role matches.
+            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm text-emerald-100">
+              No major recurring gaps detected — your profile aligns well.
             </div>
           ) : (
-            <>
-              <div className="mb-4 grid grid-cols-3 gap-3">
-                <div className="rounded-xl border border-rose-500/20 bg-rose-500/[0.08] p-3 text-center">
-                  <p className="text-xl font-bold text-rose-300">
-                    {gaps.filter((g) => g.importance === "High").length}
-                  </p>
-                  <p className="mt-1 text-[10px] uppercase tracking-wider text-rose-400/70">
-                    High priority
-                  </p>
-                </div>
-
-                <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.08] p-3 text-center">
-                  <p className="text-xl font-bold text-amber-300">
-                    {gaps.filter((g) => g.importance === "Moderate").length}
-                  </p>
-                  <p className="mt-1 text-[10px] uppercase tracking-wider text-amber-400/70">
-                    Moderate
-                  </p>
-                </div>
-
-                <div className="rounded-xl border border-sky-500/20 bg-sky-500/[0.08] p-3 text-center">
-                  <p className="text-xl font-bold text-sky-300">
-                    {gaps.filter((g) => g.importance === "Low").length}
-                  </p>
-                  <p className="mt-1 text-[10px] uppercase tracking-wider text-sky-400/70">
-                    Low priority
-                  </p>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                {gaps.map((gap, index) => (
-                  <GapCard key={`${gap.skill}-${index}`} gap={gap} index={index} />
+            <div className="space-y-4">
+              {/* Summary stat row */}
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { count: highCount, label: "High priority", color: "border-rose-500/25 bg-rose-500/10 text-rose-300", sub: "text-rose-400/60" },
+                  { count: modCount,  label: "Moderate",       color: "border-amber-500/25 bg-amber-500/10 text-amber-300", sub: "text-amber-400/60" },
+                  { count: lowCount,  label: "Lower impact",   color: "border-sky-500/25 bg-sky-500/10 text-sky-300", sub: "text-sky-400/60" },
+                ].map(({ count, label, color, sub }) => (
+                  <div key={label} className={`rounded-xl border p-2.5 text-center ${color}`}>
+                    <p className="text-lg font-bold leading-none">{count}</p>
+                    <p className={`mt-1 text-[9px] uppercase tracking-wider ${sub}`}>{label}</p>
+                  </div>
                 ))}
               </div>
-            </>
+
+              {/* Matched / Missing ratio bar */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5 text-[10px] text-slate-400">
+                  <span>Gap severity distribution</span>
+                  <span>{total} total gaps</span>
+                </div>
+                <div className="h-2 rounded-full bg-white/10 flex overflow-hidden">
+                  {highCount > 0 && <div className="h-full bg-rose-500/70 transition-all" style={{ width: `${(highCount / total) * 100}%` }} />}
+                  {modCount  > 0 && <div className="h-full bg-amber-500/60 transition-all" style={{ width: `${(modCount / total) * 100}%` }} />}
+                  {lowCount  > 0 && <div className="h-full bg-sky-500/40 transition-all"  style={{ width: `${(lowCount / total) * 100}%` }} />}
+                </div>
+              </div>
+
+              {/* High priority gaps */}
+              {highGaps.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-rose-400 mb-2">High Priority</p>
+                  <div className="space-y-2">
+                    {highGaps.map((gap, i) => (
+                      <motion.div key={gap.skill}
+                        initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: i * 0.04 }}
+                        className="flex items-center justify-between gap-3 rounded-xl border border-rose-500/20 bg-rose-500/[0.06] px-3.5 py-2.5"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className="h-2 w-2 rounded-full bg-rose-400 shrink-0" />
+                          <span className="text-sm font-medium text-white truncate">{gap.skill}</span>
+                        </div>
+                        <div className="flex items-center gap-3 shrink-0 text-xs text-slate-400">
+                          <span>Weight <span className="font-semibold text-white">{gap.jobWeight ?? 0}</span></span>
+                          <span>You <span className="font-semibold text-white">{gap.userWeight ?? 0}</span></span>
+                        </div>
+                      </motion.div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Medium priority gaps */}
+              {modGaps.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-amber-400 mb-2">Medium Priority</p>
+                  <div className="space-y-2">
+                    {modGaps.map((gap, i) => (
+                      <motion.div key={gap.skill}
+                        initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: (highGaps.length + i) * 0.04 }}
+                        className="flex items-center justify-between gap-3 rounded-xl border border-amber-500/20 bg-amber-500/[0.05] px-3.5 py-2.5"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className="h-2 w-2 rounded-full bg-amber-400 shrink-0" />
+                          <span className="text-sm font-medium text-white truncate">{gap.skill}</span>
+                        </div>
+                        <div className="flex items-center gap-3 shrink-0 text-xs text-slate-400">
+                          <span>Weight <span className="font-semibold text-white">{gap.jobWeight ?? 0}</span></span>
+                          <span>You <span className="font-semibold text-white">{gap.userWeight ?? 0}</span></span>
+                        </div>
+                      </motion.div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
         </motion.div>
       </motion.div>
@@ -953,7 +1103,7 @@ function ActionPlanPanel({
   );
 }
 
-// ─── Main export ──────────────────────────────────────────────────────────────
+// ─── Sidebar: CV Strengths ────────────────────────────────────────────────────
 function SkillsSidebarWidget({
   groupedSkills,
   onClick,
@@ -962,64 +1112,60 @@ function SkillsSidebarWidget({
   onClick: () => void;
 }) {
   const totalSkills = groupedSkills.reduce((sum, g) => sum + g.skills.length, 0);
+  const maxCount = Math.max(...groupedSkills.map((g) => g.skills.length), 1);
 
   return (
     <motion.button
       type="button"
       onClick={onClick}
-      initial={{ opacity: 0, x: -12 }}
+      initial={{ opacity: 0, x: -10 }}
       animate={{ opacity: 1, x: 0 }}
-      transition={{ duration: 0.3, delay: 0.1 }}
-      className="group w-full rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-left transition hover:border-emerald-500/25 hover:bg-emerald-500/[0.04]"
+      transition={{ duration: 0.28, delay: 0.1 }}
+      className="group w-full rounded-2xl border border-white/10 bg-white/[0.03] p-3.5 text-left transition hover:border-emerald-500/25 hover:bg-emerald-500/[0.04]"
     >
-      {/* Icon */}
-      <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-emerald-500/20 bg-emerald-500/10 mb-3">
-        <svg viewBox="0 0 16 16" className="h-4 w-4 text-emerald-400" fill="currentColor">
-          <circle cx="3" cy="3" r="1.5"/><circle cx="8" cy="3" r="1.5"/><circle cx="13" cy="3" r="1.5"/>
-          <circle cx="3" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="13" cy="8" r="1.5"/>
-          <circle cx="3" cy="13" r="1.5"/><circle cx="8" cy="13" r="1.5"/><circle cx="13" cy="13" r="1.5"/>
-        </svg>
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <p className="text-[9px] font-semibold uppercase tracking-[0.2em] text-emerald-400">CV Strengths</p>
+          <p className="text-xl font-bold text-white leading-none mt-0.5">{totalSkills}
+            <span className="text-[11px] font-normal text-slate-400 ml-1">skills</span>
+          </p>
+        </div>
+        <span className="text-slate-500 group-hover:text-emerald-400 transition text-base">→</span>
       </div>
 
-      <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-400 mb-1">CV Strengths</p>
-      <p className="text-2xl font-bold text-white leading-none mb-0.5">{totalSkills}</p>
-      <p className="text-[11px] text-slate-400 mb-4">verified skills</p>
-
-      {/* Domain list */}
-      <div className="space-y-2">
-        {groupedSkills.slice(0, 5).map((group) => (
-          <div key={group.title} className="flex items-center justify-between gap-1">
-            <span className="text-[11px] text-slate-400 truncate leading-tight">{group.title.replace(" & ", " & ").split(" ").slice(0, 2).join(" ")}</span>
-            <span className="shrink-0 text-[11px] font-semibold text-emerald-400">{group.skills.length}</span>
-          </div>
-        ))}
+      {/* Domain bars — no scroll, fits entirely */}
+      <div className="space-y-1.5">
+        {groupedSkills.slice(0, 5).map((group) => {
+          const shortTitle = group.title.split(" ").slice(0, 2).join(" ");
+          const widthPct = Math.round((group.skills.length / maxCount) * 100);
+          return (
+            <div key={group.title}>
+              <div className="flex items-center justify-between mb-0.5">
+                <span className="text-[10px] text-slate-400 truncate max-w-[100px]">{shortTitle}</span>
+                <span className="text-[10px] font-semibold text-emerald-400 shrink-0">{group.skills.length}</span>
+              </div>
+              <div className="h-1 rounded-full bg-white/10">
+                <div
+                  className="h-full rounded-full bg-emerald-500/40 group-hover:bg-emerald-500/60 transition-all"
+                  style={{ width: `${Math.max(15, widthPct)}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
         {groupedSkills.length > 5 && (
-          <p className="text-[11px] text-slate-500">+{groupedSkills.length - 5} more</p>
+          <p className="text-[10px] text-slate-500 pt-0.5">+{groupedSkills.length - 5} more domains</p>
         )}
       </div>
 
-      {/* Mini bar chart */}
-      <div className="mt-4 flex items-end gap-0.5 h-7">
-        {groupedSkills.slice(0, 6).map((group) => {
-          const maxCount = Math.max(...groupedSkills.map(g => g.skills.length));
-          const heightPct = maxCount > 0 ? (group.skills.length / maxCount) * 100 : 0;
-          return (
-            <div
-              key={group.title}
-              className="flex-1 rounded-sm bg-emerald-500/25 transition-all group-hover:bg-emerald-500/40"
-              style={{ height: `${Math.max(20, heightPct)}%` }}
-            />
-          );
-        })}
-      </div>
-
-      <p className="mt-3 text-[10px] text-slate-500 group-hover:text-emerald-400/60 transition">
-        Tap to explore →
+      <p className="mt-3 text-[9px] text-slate-600 group-hover:text-emerald-400/50 transition">
+        Tap to view all →
       </p>
     </motion.button>
   );
 }
 
+// ─── Sidebar: Priority Gaps ───────────────────────────────────────────────────
 function GapsSidebarWidget({
   gaps,
   onClick,
@@ -1027,92 +1173,60 @@ function GapsSidebarWidget({
   gaps: Gap[];
   onClick: () => void;
 }) {
-  const highCount = gaps.filter(g => g.importance === "High").length;
-  const modCount  = gaps.filter(g => g.importance === "Moderate").length;
-  const lowCount  = gaps.filter(g => g.importance === "Low").length;
+  const highGaps = gaps.filter((g) => g.importance === "High");
+  const modGaps  = gaps.filter((g) => g.importance === "Moderate");
+  const total    = gaps.length;
+  const matched  = 0; // sidebar doesn't have matched context — show gap ratio
 
   return (
     <motion.button
       type="button"
       onClick={onClick}
-      initial={{ opacity: 0, x: 12 }}
+      initial={{ opacity: 0, x: 10 }}
       animate={{ opacity: 1, x: 0 }}
-      transition={{ duration: 0.3, delay: 0.15 }}
-      className="group w-full rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-left transition hover:border-rose-500/25 hover:bg-rose-500/[0.04]"
+      transition={{ duration: 0.28, delay: 0.15 }}
+      className="group w-full rounded-2xl border border-white/10 bg-white/[0.03] p-3.5 text-left transition hover:border-rose-500/25 hover:bg-rose-500/[0.04]"
     >
-      {/* Icon */}
-      <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-rose-500/20 bg-rose-500/10 mb-3">
-        <svg viewBox="0 0 16 16" className="h-4 w-4 text-rose-400" fill="none" stroke="currentColor" strokeWidth="1.5">
-          <path d="M8 2v5M8 10.5v.5" strokeLinecap="round"/>
-          <path d="M8 14A6 6 0 108 2a6 6 0 000 12z"/>
-        </svg>
-      </div>
-
-      <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-rose-400 mb-1">Priority Gaps</p>
-      <p className="text-2xl font-bold text-white leading-none mb-0.5">{gaps.length}</p>
-      <p className="text-[11px] text-slate-400 mb-4">skills to address</p>
-
-      {/* Severity breakdown */}
-      <div className="space-y-2.5">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <span className="h-1.5 w-1.5 rounded-full bg-rose-400" />
-            <span className="text-[11px] text-slate-400">High</span>
-          </div>
-          <span className="text-[11px] font-semibold text-rose-300">{highCount}</span>
-        </div>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
-            <span className="text-[11px] text-slate-400">Moderate</span>
-          </div>
-          <span className="text-[11px] font-semibold text-amber-300">{modCount}</span>
-        </div>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <span className="h-1.5 w-1.5 rounded-full bg-sky-400" />
-            <span className="text-[11px] text-slate-400">Low</span>
-          </div>
-          <span className="text-[11px] font-semibold text-sky-300">{lowCount}</span>
-        </div>
-      </div>
-
-      {/* Stacked severity bar */}
-      <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/10 flex">
-        {highCount > 0 && (
-          <div
-            className="h-full bg-rose-500/60"
-            style={{ width: `${(highCount / gaps.length) * 100}%` }}
-          />
-        )}
-        {modCount > 0 && (
-          <div
-            className="h-full bg-amber-500/60"
-            style={{ width: `${(modCount / gaps.length) * 100}%` }}
-          />
-        )}
-        {lowCount > 0 && (
-          <div
-            className="h-full bg-sky-500/60"
-            style={{ width: `${(lowCount / gaps.length) * 100}%` }}
-          />
-        )}
-      </div>
-
-      {/* Top gap names */}
-      <div className="mt-4 space-y-1.5">
-        {gaps.slice(0, 3).map((gap) => (
-          <p key={gap.skill} className="text-[11px] text-slate-400 truncate leading-tight">
-            · {gap.skill}
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <p className="text-[9px] font-semibold uppercase tracking-[0.2em] text-rose-400">Skill Gaps</p>
+          <p className="text-xl font-bold text-white leading-none mt-0.5">{total}
+            <span className="text-[11px] font-normal text-slate-400 ml-1">to close</span>
           </p>
-        ))}
-        {gaps.length > 3 && (
-          <p className="text-[11px] text-slate-500">+{gaps.length - 3} more</p>
-        )}
+        </div>
+        <span className="text-slate-500 group-hover:text-rose-400 transition text-base">→</span>
       </div>
 
-      <p className="mt-3 text-[10px] text-slate-500 group-hover:text-rose-400/60 transition">
-        Tap to explore →
+      {/* Stacked priority bar */}
+      <div className="h-1.5 rounded-full bg-white/10 flex overflow-hidden mb-3">
+        {highGaps.length > 0 && (
+          <div className="h-full bg-rose-500/70" style={{ width: `${(highGaps.length / total) * 100}%` }} />
+        )}
+        {modGaps.length > 0 && (
+          <div className="h-full bg-amber-500/60" style={{ width: `${(modGaps.length / total) * 100}%` }} />
+        )}
+        <div className="h-full bg-sky-500/40 flex-1" />
+      </div>
+
+      {/* High priority gap names */}
+      <div className="space-y-1">
+        {highGaps.slice(0, 3).map((gap) => (
+          <div key={gap.skill} className="flex items-center gap-1.5">
+            <span className="h-1 w-1 rounded-full bg-rose-400 shrink-0" />
+            <span className="text-[10px] text-slate-300 truncate">{gap.skill}</span>
+          </div>
+        ))}
+        {modGaps.slice(0, highGaps.length < 2 ? 2 : 1).map((gap) => (
+          <div key={gap.skill} className="flex items-center gap-1.5">
+            <span className="h-1 w-1 rounded-full bg-amber-400 shrink-0" />
+            <span className="text-[10px] text-slate-400 truncate">{gap.skill}</span>
+          </div>
+        ))}
+        {total > 4 && <p className="text-[10px] text-slate-500">+{total - 4} more</p>}
+      </div>
+
+      <p className="mt-3 text-[9px] text-slate-600 group-hover:text-rose-400/50 transition">
+        Tap to view all →
       </p>
     </motion.button>
   );
@@ -1180,7 +1294,6 @@ export function ResultsSection({ analysis }: { analysis: AnalysisResponse }) {
                   <SectionHeading
                     eyebrow="Top matches"
                     title="Best role matches"
-                    subtitle="The matching engine remains the core of the product, so the best-fitting roles appear first and take the main visual focus."
                   />
                 </div>
                 {/* Mobile: show compact widgets inline */}
@@ -1210,7 +1323,7 @@ export function ResultsSection({ analysis }: { analysis: AnalysisResponse }) {
                   </button>
                 ) : null}
               </div>
-              <div className="mt-5 grid gap-5">
+              <div className="mt-4 grid gap-4 md:grid-cols-2">
                 {topMatchesToShow.length === 0 ? (
                   <div className="rounded-2xl border border-white/10 bg-black/10 p-5 text-sm leading-6 text-slate-300">
                     No ranked job matches were produced for this run.

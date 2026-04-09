@@ -37,10 +37,17 @@ from matching import (
     calculate_exact_overlap_ratio,
     calculate_category_alignment_score,
     calculate_calibrated_hybrid_score,
+    calculate_enhanced_hybrid_score,
     _build_user_skill_weights,
     _build_job_skill_weights,
     _split_skill_strengths,
     gap_summary_to_serializable,
+    enrich_job_signals,
+    infer_user_experience_level,
+    calculate_demand_score,
+    calculate_salary_score,
+    calculate_experience_alignment_score,
+    _SALARY_REFERENCE_MAX,
 )
 
 
@@ -656,25 +663,52 @@ def _build_why_this_role(job: dict[str, Any]) -> list[str]:
     score_breakdown = job.get("score_breakdown", {}) or {}
     category = str(job.get("category", "")).strip()
 
+    demand_score = float(score_breakdown.get("demand_score", 0.5))
+    experience_alignment = float(score_breakdown.get("experience_alignment_score", 0.7))
+    salary_score = float(score_breakdown.get("salary_score", 0.5))
+    semantic_pct = float(score_breakdown.get("semantic_match_percent", 0.0))
+
+    # --- Skill alignment (highest signal) ---
     if strong_skills:
         strong_display = ", ".join(
             display_label_for_canonical(skill)
             for skill in strong_skills[:3]
         )
-        reasons.append(f"Strong alignment in {strong_display}.")
+        reasons.append(f"Strong skill alignment in {strong_display}.")
 
-    if float(score_breakdown.get("semantic_match_percent", 0.0)) >= 70.0:
-        reasons.append("Your project and experience language is semantically close to this role.")
+    # --- Demand signal ---
+    if demand_score >= 0.85:
+        reasons.append("High market demand increases this role's ranking.")
+    elif demand_score >= 0.65:
+        reasons.append("Solid market demand contributes positively to this role's ranking.")
 
-    if category:
-        reasons.append(f"This role aligns with your current {category} direction.")
+    # --- Experience alignment ---
+    if experience_alignment >= 0.9:
+        reasons.append("Experience level closely matches your profile.")
+    elif experience_alignment >= 0.75:
+        reasons.append("Experience level is a reasonable match for your profile.")
+    elif experience_alignment < 0.5:
+        reasons.append("Experience gap exists — consider this a stretch target role.")
 
+    # --- Salary signal (low-weight boost, only if notable) ---
+    if salary_score >= 0.7 and len(reasons) < 3:
+        reasons.append("Salary competitiveness slightly boosts this role.")
+
+    # --- Semantic fallback ---
+    if semantic_pct >= 70.0 and len(reasons) < 3:
+        reasons.append("Your background language is semantically close to this role.")
+
+    # --- Category direction fallback ---
+    if category and len(reasons) < 3:
+        reasons.append(f"Role aligns with your {category} career direction.")
+
+    # --- Partial skills fallback ---
     if len(reasons) < 3 and partial_skills:
         partial_display = ", ".join(
             display_label_for_canonical(skill)
             for skill in partial_skills[:2]
         )
-        reasons.append(f"You already show partial overlap in {partial_display}.")
+        reasons.append(f"Partial overlap in {partial_display} — skills to build on.")
 
     return reasons[:3]
 
@@ -903,6 +937,20 @@ def analyze_cv_skills(
         ).items()
     }
 
+    # Phase-1: infer user seniority for experience alignment scoring
+    user_experience_level = infer_user_experience_level(user_skill_weights)
+
+    # Phase-1: compute salary pool ceiling for normalization
+    salary_pool_max = _SALARY_REFERENCE_MAX
+    if jobs:
+        pool_midpoints = [
+            enrich_job_signals(j).salary_midpoint
+            for j in jobs
+        ]
+        valid_midpoints = [m for m in pool_midpoints if m is not None and m > 0]
+        if valid_midpoints:
+            salary_pool_max = max(max(valid_midpoints), _SALARY_REFERENCE_MAX)
+
     ranked_jobs: list[dict[str, Any]] = []
     semantic_score_by_row: dict[int, float] = {}
 
@@ -941,11 +989,22 @@ def analyze_cv_skills(
             getattr(job, "category", ""),
         )
 
-        final_score = calculate_calibrated_hybrid_score(
+        # Phase-1: new signal scores
+        job_signals = enrich_job_signals(job)
+        demand_score = calculate_demand_score(job_signals)
+        exp_alignment_score = calculate_experience_alignment_score(
+            user_experience_level, job_signals
+        )
+        sal_score = calculate_salary_score(job_signals, salary_pool_max)
+
+        final_score = calculate_enhanced_hybrid_score(
             semantic_score,
             weighted_skill_score,
             exact_overlap_score,
             category_alignment_score,
+            demand_score=demand_score,
+            experience_alignment_score=exp_alignment_score,
+            salary_score=sal_score,
         )
 
         strong_skills, partial_skills, missing_skills = _split_skill_strengths(
@@ -966,6 +1025,14 @@ def analyze_cv_skills(
             "weighted_skill_percent": round(weighted_skill_score * 100.0, 2),
             "exact_overlap_percent": round(exact_overlap_score * 100.0, 2),
             "category_alignment_percent": round(category_alignment_score * 100.0, 2),
+            # Phase-2 multi-factor signals – raw [0,1] for _build_why_this_role
+            # and percent-scaled for display/debugging
+            "demand_score": round(demand_score, 4),
+            "demand_score_percent": round(demand_score * 100.0, 2),
+            "experience_alignment_score": round(exp_alignment_score, 4),
+            "experience_alignment_percent": round(exp_alignment_score * 100.0, 2),
+            "salary_score": round(sal_score, 4),
+            "salary_score_percent": round(sal_score * 100.0, 2),
         }
 
         ranked_jobs.append(
@@ -984,6 +1051,11 @@ def analyze_cv_skills(
                 "missing_skills": missing_skills[:10],
 
                 "score_breakdown": score_breakdown,
+
+                # Phase-1: exposed ranking signals
+                "demand_score": round(demand_score, 4),
+                "experience_alignment_score": round(exp_alignment_score, 4),
+                "salary_score": round(sal_score, 4),
             }
         )
 
@@ -1075,4 +1147,11 @@ __all__ = [
     "_aggregate_priority_gaps",
     # main analysis
     "analyze_cv_skills",
+    # phase-1 re-exports (used indirectly via cv_analysis)
+    "enrich_job_signals",
+    "infer_user_experience_level",
+    "calculate_demand_score",
+    "calculate_salary_score",
+    "calculate_experience_alignment_score",
+    "calculate_enhanced_hybrid_score",
 ]

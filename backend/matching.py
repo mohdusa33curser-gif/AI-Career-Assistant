@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Final, TypedDict
@@ -40,6 +41,160 @@ HYBRID_SCORE_WEIGHTS: Final[dict[str, float]] = {
 SEMANTIC_WEIGHT = 0.50
 WEIGHTED_SKILL_WEIGHT = 0.30
 EXACT_OVERLAP_WEIGHT = 0.20
+
+# ---------------------------------------------------------------------------
+# Job signal enrichment – Phase 1 Ranking Engine
+# ---------------------------------------------------------------------------
+
+_JOB_TREND_NUMERIC: Final[dict[str, float]] = {
+    "high": 1.0,
+    "growing": 1.0,
+    "medium": 0.7,
+    "moderate": 0.7,
+    "stable": 0.7,
+    "low": 0.4,
+    "declining": 0.3,
+}
+
+_EXPERIENCE_LEVEL_NUMERIC: Final[dict[str, float]] = {
+    "junior": 0.4,
+    "entry": 0.4,
+    "entry-level": 0.4,
+    "entry level": 0.4,
+    "mid": 0.7,
+    "mid-level": 0.7,
+    "mid level": 0.7,
+    "intermediate": 0.7,
+    "senior": 1.0,
+    "lead": 1.0,
+    "principal": 1.0,
+    "staff": 1.0,
+    "expert": 1.0,
+}
+
+_SALARY_REFERENCE_MAX: Final[float] = 200_000.0
+
+
+def _parse_salary_midpoint(salary_range: str | None) -> float | None:
+    """Extract numeric salary midpoint from a range string like '80000 - 120000' or '$80k-$120k'."""
+    if not salary_range:
+        return None
+    text = salary_range.strip().lower()
+    text = re.sub(r"[$£€,]", "", text)
+    text = re.sub(r"(\d+)\s*k\b", lambda m: str(int(m.group(1)) * 1000), text)
+    numbers = re.findall(r"\d+(?:\.\d+)?", text)
+    if not numbers:
+        return None
+    values = [float(n) for n in numbers if float(n) >= 10_000]
+    if not values:
+        return None
+    if len(values) >= 2:
+        return (values[0] + values[1]) / 2.0
+    return values[0]
+
+
+def _normalize_job_trend(job_trend: str | None) -> float:
+    """Map job trend text to a numeric score in [0.0, 1.0]. Neutral default = 0.5."""
+    if not job_trend:
+        return 0.5
+    key = job_trend.strip().lower()
+    return _JOB_TREND_NUMERIC.get(key, 0.5)
+
+
+def _normalize_experience_level(experience: str | None) -> float:
+    """Convert experience text to level score: junior=0.4, mid=0.7, senior=1.0."""
+    if not experience:
+        return 0.7
+    text = experience.strip().lower()
+    for key, score in _EXPERIENCE_LEVEL_NUMERIC.items():
+        if key in text:
+            return score
+    year_match = re.search(r"(\d+)\s*\+?\s*(?:years?|yrs?)", text)
+    if year_match:
+        years = int(year_match.group(1))
+        if years <= 2:
+            return 0.4
+        if years <= 5:
+            return 0.7
+        return 1.0
+    return 0.7
+
+
+@dataclass(frozen=True)
+class JobSignals:
+    """Extracted numeric signals from a job record for multi-factor ranking."""
+    demand_score: float = 0.5
+    salary_midpoint: float | None = None
+    experience_level: float = 0.7
+
+
+def enrich_job_signals(job_record: Any) -> JobSignals:
+    """
+    Extract and normalize demand, salary, and experience signals from a job record.
+
+    Falls back safely to neutral defaults for any missing or malformed fields.
+    """
+    job_trend = getattr(job_record, "job_trend", None) or ""
+    salary_range = getattr(job_record, "salary_range", None) or ""
+    experience = getattr(job_record, "experience", None) or ""
+
+    return JobSignals(
+        demand_score=_normalize_job_trend(job_trend),
+        salary_midpoint=_parse_salary_midpoint(salary_range),
+        experience_level=_normalize_experience_level(experience),
+    )
+
+
+def infer_user_experience_level(user_skill_weights: dict[str, float]) -> float:
+    """
+    Heuristic: estimate user seniority from their skill weight distribution.
+
+    >= 6 skills with weight >= 3 → senior (1.0)
+    >= 3 skills with weight >= 2 → mid (0.7)
+    otherwise → junior (0.4)
+    """
+    if not user_skill_weights:
+        return 0.4
+    high_weight = sum(1 for w in user_skill_weights.values() if w >= 3.0)
+    mid_weight = sum(1 for w in user_skill_weights.values() if w >= 2.0)
+    if high_weight >= 6:
+        return 1.0
+    if mid_weight >= 3:
+        return 0.7
+    return 0.4
+
+
+def calculate_demand_score(signals: JobSignals) -> float:
+    """Return the normalized market demand score derived from job_trend."""
+    return signals.demand_score
+
+
+def calculate_salary_score(
+    signals: JobSignals,
+    salary_max_in_pool: float = _SALARY_REFERENCE_MAX,
+) -> float:
+    """
+    Normalize salary midpoint to [0, 1] relative to a pool ceiling.
+
+    Returns 0.5 (neutral) when salary data is absent.
+    """
+    if signals.salary_midpoint is None:
+        return 0.5
+    ref = max(salary_max_in_pool, 1.0)
+    return max(0.0, min(1.0, signals.salary_midpoint / ref))
+
+
+def calculate_experience_alignment_score(
+    user_level: float,
+    job_signals: JobSignals,
+) -> float:
+    """
+    Score how well the user's inferred seniority matches the job's requirement.
+
+    Perfect match → 1.0; maximum distance (0.6) → 0.4.
+    """
+    alignment = 1.0 - abs(user_level - job_signals.experience_level)
+    return max(0.0, min(1.0, alignment))
 
 
 # ---------------------------------------------------------------------------
@@ -596,6 +751,40 @@ def calculate_calibrated_hybrid_score(
     return max(0.0, min(1.0, score))
 
 
+def calculate_enhanced_hybrid_score(
+    semantic_score: float,
+    weighted_skill_score: float,
+    exact_overlap_score: float,
+    category_alignment_score: float,
+    demand_score: float = 0.5,
+    experience_alignment_score: float = 0.7,
+    salary_score: float = 0.5,
+) -> float:
+    """
+    Multi-factor hybrid score integrating market demand, experience fit, and salary signals.
+
+    Phase-2 weights:
+      semantic              0.40
+      weighted_skill        0.25
+      exact_overlap         0.10
+      category_alignment    0.10
+      demand_score          0.10
+      experience_alignment  0.05
+      salary_score          0.05
+    All inputs must be in [0, 1]; result is clamped to [0, 1].
+    """
+    score = (
+        0.40 * semantic_score
+        + 0.25 * weighted_skill_score
+        + 0.10 * exact_overlap_score
+        + 0.10 * category_alignment_score
+        + 0.10 * demand_score
+        + 0.05 * experience_alignment_score
+        + 0.05 * salary_score
+    )
+    return max(0.0, min(1.0, score))
+
+
 @dataclass(frozen=True)
 class ScoredJob:
     """Job with structured + semantic scoring, final rank, and gap analysis."""
@@ -895,6 +1084,20 @@ __all__ = [
     "calculate_career_score",
     "calculate_category_alignment_score",
     "calculate_calibrated_hybrid_score",
+    # phase-1 ranking engine
+    "_JOB_TREND_NUMERIC",
+    "_EXPERIENCE_LEVEL_NUMERIC",
+    "_SALARY_REFERENCE_MAX",
+    "_parse_salary_midpoint",
+    "_normalize_job_trend",
+    "_normalize_experience_level",
+    "JobSignals",
+    "enrich_job_signals",
+    "infer_user_experience_level",
+    "calculate_demand_score",
+    "calculate_salary_score",
+    "calculate_experience_alignment_score",
+    "calculate_enhanced_hybrid_score",
     "ScoredJob",
     "_compute_final_hybrid_score",
     "score_jobs_against_user",

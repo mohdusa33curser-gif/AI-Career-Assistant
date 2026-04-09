@@ -17,6 +17,14 @@ import type {
   SkillImportance,
 } from "@/types/api";
 
+/** Clamp a raw [0,1] signal to a valid range; returns undefined if absent/invalid. */
+function safeSignal(v: number | null | undefined): number | undefined {
+  if (v === undefined || v === null) return undefined;
+  const n = Number(v);
+  if (!isFinite(n)) return undefined;
+  return Math.max(0, Math.min(1, n));
+}
+
 function weightToImportance(w: number): SkillImportance {
   if (w >= 3) return "High";
   if (w >= 2) return "Moderate";
@@ -35,11 +43,18 @@ function gapRowToSkill(
 }
 
 function mapScoreBreakdown(job: AnalyzeSkillsTopJob): JobScoreBreakdown {
+  const sb = job.score_breakdown;
   return {
-    semanticMatchPercent: Number(job.score_breakdown?.semantic_match_percent ?? 0),
-    weightedSkillPercent: Number(job.score_breakdown?.weighted_skill_percent ?? 0),
-    exactOverlapPercent: Number(job.score_breakdown?.exact_overlap_percent ?? 0),
-    categoryAlignmentPercent: Number(job.score_breakdown?.category_alignment_percent ?? 0),
+    semanticMatchPercent: Number(sb?.semantic_match_percent ?? 0),
+    weightedSkillPercent: Number(sb?.weighted_skill_percent ?? 0),
+    exactOverlapPercent: Number(sb?.exact_overlap_percent ?? 0),
+    categoryAlignmentPercent: Number(sb?.category_alignment_percent ?? 0),
+    // Phase-2: prefer score_breakdown field, fall back to top-level job field
+    demandScore: safeSignal(sb?.demand_score ?? job.demand_score),
+    salaryScore: safeSignal(sb?.salary_score ?? job.salary_score),
+    experienceAlignmentScore: safeSignal(
+      sb?.experience_alignment_score ?? job.experience_alignment_score,
+    ),
   };
 }
 
@@ -52,6 +67,7 @@ function mapTopJob(job: AnalyzeSkillsTopJob, index: number): JobMatch {
 
   const missingSkills = job.gap_analysis.missing.map((m) => m.skill);
 
+  const breakdown = mapScoreBreakdown(job);
   return {
     id: String(job.source_row_index ?? index),
     title: job.job_title,
@@ -60,7 +76,11 @@ function mapTopJob(job: AnalyzeSkillsTopJob, index: number): JobMatch {
     skills,
     missingSkills,
     whyThisRole: Array.isArray(job.why_this_role) ? job.why_this_role : [],
-    scoreBreakdown: mapScoreBreakdown(job),
+    scoreBreakdown: breakdown,
+    // Phase-2 signals also hoisted to top-level for easy component access
+    demandScore: breakdown.demandScore,
+    salaryScore: breakdown.salaryScore,
+    experienceAlignmentScore: breakdown.experienceAlignmentScore,
   };
 }
 
