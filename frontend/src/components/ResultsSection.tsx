@@ -622,22 +622,22 @@ function JobMatchCard({ job, index, onOpenInsight }: { job: JobMatch; index: num
         </div>
       )}
 
-      {/* 2-block metric row */}
-      <div className="mt-2.5 grid grid-cols-2 gap-2">
+      {/* 2-block metric row — compact */}
+      <div className="mt-2 grid grid-cols-2 gap-1.5">
         {metricPairs.map(({ label, value }) => {
           const v = Math.round(Math.max(0, Math.min(100, value)));
           const barColor = v >= 70 ? "bg-emerald-500/60" : v >= 40 ? "bg-amber-500/60" : "bg-rose-500/60";
           return (
-            <div key={label} className="rounded-xl border border-white/10 bg-black/10 px-3 py-2">
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-[10px] text-slate-400">{label}</span>
-                <span className="text-[11px] font-bold text-white">{v}%</span>
+            <div key={label} className="rounded-lg border border-white/10 bg-black/10 px-2.5 py-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] text-slate-500">{label}</span>
+                <span className="text-[10px] font-bold text-white">{v}%</span>
               </div>
-              <div className="h-1 overflow-hidden rounded-full bg-white/10">
+              <div className="mt-1 h-0.5 overflow-hidden rounded-full bg-white/10">
                 <motion.div
                   initial={{ width: 0 }}
                   animate={{ width: `${v}%` }}
-                  transition={{ duration: 0.55, ease: "easeOut", delay: index * 0.04 + 0.1 }}
+                  transition={{ duration: 0.5, ease: "easeOut", delay: index * 0.04 + 0.1 }}
                   className={`h-full rounded-full ${barColor}`}
                 />
               </div>
@@ -647,34 +647,33 @@ function JobMatchCard({ job, index, onOpenInsight }: { job: JobMatch; index: num
       </div>
 
       {/* Skill groups — compact, capped */}
-      <div className="mt-2.5 space-y-1.5 flex-1">
+      <div className="mt-2 space-y-1.5 flex-1">
         {matched.length > 0 && (
           <div>
-            <p className="mb-1 text-[9px] font-semibold uppercase tracking-[0.16em] text-emerald-400/80">Strong match</p>
+            <p className="mb-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-emerald-400/70">Strengths</p>
             <div className="flex flex-wrap gap-1">
-              {matched.map((s) => <SkillBadge key={`m-${s.name}`} skill={s} />)}
+              {matched.slice(0, 4).map((s) => <SkillBadge key={`m-${s.name}`} skill={s} />)}
             </div>
           </div>
         )}
         {missing.length > 0 && (
           <div>
-            <p className="mb-1 text-[9px] font-semibold uppercase tracking-[0.16em] text-rose-400/80">Missing</p>
+            <p className="mb-0.5 text-[9px] font-semibold uppercase tracking-[0.14em] text-rose-400/70">Gaps</p>
             <div className="flex flex-wrap gap-1">
-              {missing.map((s) => <SkillBadge key={`x-${s.name}`} skill={s} />)}
+              {missing.slice(0, 4).map((s) => <SkillBadge key={`x-${s.name}`} skill={s} />)}
             </div>
           </div>
         )}
       </div>
 
       {/* Primary CTA */}
-      <div className="mt-3 pt-2.5 border-t border-white/10">
+      <div className="mt-2.5 pt-2.5 border-t border-white/10">
         <button
           type="button"
           onClick={() => onOpenInsight(job)}
-          className="w-full rounded-xl bg-blue-800 px-4 py-2 text-sm font-semibold text-white shadow-[0_4px_20px_rgba(0,0,0,0.35)] transition hover:brightness-110 active:scale-[0.98] flex items-center justify-center gap-2"
+          className="w-full rounded-xl bg-blue-800 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_4px_20px_rgba(0,0,0,0.35)] transition hover:brightness-110 active:scale-[0.98] flex items-center justify-center gap-2"
         >
-          View full recommendation
-          <span className="opacity-70 text-base leading-none">→</span>
+          View Recommendation →
         </button>
       </div>
     </motion.article>
@@ -1097,7 +1096,7 @@ function OverviewHeader({ analysis, readinessBand }: { analysis: AnalysisRespons
   const fitAlignment = sb ? (sb.exactOverlapPercent + sb.categoryAlignmentPercent) / 2 : 0;
 
   return (
-    <Panel className="overflow-hidden p-4 md:p-[18px]" delay={0.04}>
+    <Panel className="overflow-hidden p-3 md:p-4" delay={0.04}>
       <div className="grid gap-4 xl:grid-cols-[140px_minmax(0,1fr)] xl:items-start">
         <div className="flex items-start justify-center xl:justify-start">
           <ReadinessRing score={analysis.readinessScore} label={readinessBand} />
@@ -1176,16 +1175,16 @@ function ActionPlanPanel({
   const firstRec = topRecommendations[0];
 
   return (
-    <Panel className="overflow-hidden p-4 md:p-[18px]" delay={0.22}>
+    <Panel className="overflow-hidden p-3 md:p-4" delay={0.22}>
       {/* Decorative accent line */}
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-accent/30 to-transparent" />
 
-      <div className="grid gap-6 xl:grid-cols-[160px_minmax(0,1fr)] xl:items-start">
+      <div className="grid gap-4 xl:grid-cols-[120px_minmax(0,1fr)] xl:items-start">
 
         {/* LEFT: Visual accent column */}
-        <div className="flex flex-col items-center justify-start gap-4 xl:items-start">
+        <div className="flex flex-col items-center justify-start gap-3 xl:items-start">
           {/* Decorative "compass" icon block */}
-          <div className="relative flex h-36 w-36 items-center justify-center md:h-40 md:w-40">
+          <div className="relative flex h-28 w-28 items-center justify-center md:h-32 md:w-32">
             {/* Outer ring */}
             <svg viewBox="0 0 140 140" className="h-full w-full">
               <circle cx="70" cy="70" r="54" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="10" />
@@ -1228,13 +1227,10 @@ function ActionPlanPanel({
         </div>
 
         {/* RIGHT: Content */}
-        <div className="space-y-4">
-          <div className="min-w-0 space-y-1.5">
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-accent/80">What to do next</p>
-            <h2 className="text-[1.95rem] font-semibold leading-tight text-white">Your action plan</h2>
-            <p className="max-w-4xl text-sm leading-6 text-slate-300">
-              A compact roadmap based on your strongest direction and highest-impact skill gaps.
-            </p>
+        <div className="space-y-3">
+          <div className="min-w-0 space-y-0.5">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-accent/80">What to do next</p>
+            <h2 className="text-[1.4rem] font-semibold leading-tight text-white">Your action plan</h2>
           </div>
 
           {/* Roadmap items */}
@@ -1431,6 +1427,66 @@ const SORT_LABELS: Record<SortBy, string> = {
   experience: "Experience Fit",
 };
 
+function SortDropdown({ sortBy, onChange }: { sortBy: SortBy; onChange: (v: SortBy) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    if (open) document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:bg-white/10"
+      >
+        <span className="text-slate-500">Sort:</span>
+        <span className="text-white">{SORT_LABELS[sortBy]}</span>
+        <svg viewBox="0 0 10 6" className={`h-2 w-2 text-slate-400 transition-transform duration-150 ${open ? "rotate-180" : ""}`} fill="currentColor">
+          <path d="M0 0l5 6 5-6H0z" />
+        </svg>
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: -4, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -4, scale: 0.97 }}
+            transition={{ duration: 0.1 }}
+            className="absolute right-0 top-full z-20 mt-1.5 w-44 overflow-hidden rounded-xl border border-white/10 bg-slate-900 shadow-2xl"
+          >
+            {(Object.keys(SORT_LABELS) as SortBy[]).map((opt) => (
+              <button
+                key={opt}
+                type="button"
+                onClick={() => { onChange(opt); setOpen(false); }}
+                className={`flex w-full items-center justify-between px-3 py-2.5 text-xs transition ${
+                  sortBy === opt
+                    ? "bg-white/[0.06] font-semibold text-white"
+                    : "text-slate-400 hover:bg-white/[0.04] hover:text-white"
+                }`}
+              >
+                {SORT_LABELS[opt]}
+                {sortBy === opt && (
+                  <svg viewBox="0 0 10 8" className="h-2.5 w-2.5 text-accent" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M1 4l3 3 5-6" />
+                  </svg>
+                )}
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 export function ResultsSection({ analysis }: { analysis: AnalysisResponse }) {
   const [selectedJob, setSelectedJob] = useState<JobMatch | null>(null);
   const [visibleCount, setVisibleCount] = useState(4);
@@ -1501,39 +1557,26 @@ export function ResultsSection({ analysis }: { analysis: AnalysisResponse }) {
               sidebarsVisible ? "" : "xl:max-w-[860px] xl:mx-auto"
             }`}
           >
-            <Panel className="overflow-hidden p-4 md:p-5">
+            <Panel className="overflow-hidden p-3.5 md:p-4">
               {/* Panel header */}
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <SectionHeading eyebrow="Top matches" title="Best role matches" />
-                {/* Mobile skill/gap quick links */}
-                <div className="flex xl:hidden gap-2">
-                  <button type="button" onClick={() => setShowSkillsModal(true)}
-                    className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300 transition hover:bg-emerald-500/20">
-                    Skills ↗
-                  </button>
-                  <button type="button" onClick={() => setShowGapsModal(true)}
-                    className="rounded-full border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300 transition hover:bg-rose-500/20">
-                    Gaps ↗
-                  </button>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-accent/80">Top matches</p>
+                  <h2 className="text-base font-semibold text-white">Best role matches</h2>
                 </div>
-              </div>
-
-              {/* Sort controls */}
-              <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                {(Object.keys(SORT_LABELS) as SortBy[]).map((opt) => (
-                  <button
-                    key={opt}
-                    type="button"
-                    onClick={() => handleSort(opt)}
-                    className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
-                      sortBy === opt
-                        ? "bg-accent text-white shadow-[0_0_12px_rgba(99,102,241,0.28)]"
-                        : "border border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
-                    }`}
-                  >
-                    {SORT_LABELS[opt]}
-                  </button>
-                ))}
+                <div className="flex items-center gap-2">
+                  <div className="flex xl:hidden gap-1.5">
+                    <button type="button" onClick={() => setShowSkillsModal(true)}
+                      className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-medium text-emerald-300 transition hover:bg-emerald-500/20">
+                      Skills ↗
+                    </button>
+                    <button type="button" onClick={() => setShowGapsModal(true)}
+                      className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-[10px] font-medium text-rose-300 transition hover:bg-rose-500/20">
+                      Gaps ↗
+                    </button>
+                  </div>
+                  <SortDropdown sortBy={sortBy} onChange={handleSort} />
+                </div>
               </div>
 
               {/* Job grid */}
