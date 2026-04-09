@@ -208,6 +208,115 @@ function SkillGroup({ title, skills }: { title: string; skills: Skill[] }) {
   );
 }
 
+// ─── Score signal label helpers ───────────────────────────────────────────────
+
+function getExperienceLabel(score: number | undefined): { label: string; color: string } | null {
+  if (score == null) return null;
+  if (score >= 0.9) return { label: "Senior Level", color: "text-emerald-400" };
+  if (score >= 0.7) return { label: "Mid-Level", color: "text-sky-400" };
+  if (score >= 0.4) return { label: "Entry Level", color: "text-amber-400" };
+  return { label: "Stretch Role", color: "text-rose-400" };
+}
+
+function getDemandLabel(score: number | undefined): { label: string; color: string } | null {
+  if (score == null) return null;
+  if (score >= 0.85) return { label: "High Demand", color: "text-emerald-400" };
+  if (score >= 0.65) return { label: "Growing Demand", color: "text-sky-400" };
+  if (score >= 0.4) return { label: "Stable Market", color: "text-amber-400" };
+  return { label: "Low Demand", color: "text-rose-400" };
+}
+
+function getSalaryLabel(score: number | undefined): { label: string; color: string } | null {
+  if (score == null) return null;
+  if (score >= 0.7) return { label: "Competitive Salary", color: "text-emerald-400" };
+  if (score >= 0.4) return { label: "Average Salary", color: "text-amber-400" };
+  return { label: "Below Market", color: "text-rose-400" };
+}
+
+// ─── ScoreBox: combined metric card with progress bar ─────────────────────────
+
+function ScoreBox({
+  title,
+  iconNode,
+  combined,
+  subs,
+}: {
+  title: string;
+  iconNode: ReactNode;
+  combined: number;
+  subs: Array<{ label: string; value: number }>;
+}) {
+  const safe = Math.round(Math.max(0, Math.min(100, combined)));
+  const tone =
+    safe >= 70
+      ? { border: "border-emerald-500/30 bg-emerald-500/[0.06]", text: "text-emerald-300", bar: "bg-emerald-500/60", icon: "bg-emerald-500/15 text-emerald-400" }
+      : safe >= 40
+      ? { border: "border-amber-500/30 bg-amber-500/[0.06]", text: "text-amber-300", bar: "bg-amber-500/60", icon: "bg-amber-500/15 text-amber-400" }
+      : { border: "border-rose-500/30 bg-rose-500/[0.06]", text: "text-rose-300", bar: "bg-rose-500/60", icon: "bg-rose-500/15 text-rose-400" };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      whileHover={{ y: -1 }}
+      transition={{ duration: 0.28 }}
+      className={`rounded-2xl border p-3.5 ${tone.border}`}
+    >
+      <div className="mb-2 flex items-center gap-2">
+        <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg ${tone.icon}`}>
+          {iconNode}
+        </div>
+        <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-400">{title}</p>
+      </div>
+      <p className={`text-2xl font-bold leading-none ${tone.text}`}>{safe}%</p>
+      <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/10">
+        <motion.div
+          initial={{ width: 0 }}
+          animate={{ width: `${safe}%` }}
+          transition={{ duration: 0.7, ease: "easeOut", delay: 0.15 }}
+          className={`h-full rounded-full ${tone.bar}`}
+        />
+      </div>
+      <div className="mt-2.5 space-y-1">
+        {subs.map(({ label, value }) => (
+          <div key={label} className="flex items-center justify-between">
+            <span className="text-[10px] text-slate-500">{label}</span>
+            <span className="text-[10px] font-medium text-slate-300">{Math.round(value)}%</span>
+          </div>
+        ))}
+      </div>
+    </motion.div>
+  );
+}
+
+// ─── InsightPill: compact text info tile ──────────────────────────────────────
+
+function InsightPill({
+  label,
+  value,
+  hint,
+  accent = "slate",
+}: {
+  label: string;
+  value: string;
+  hint?: string | null;
+  accent?: "slate" | "rose";
+}) {
+  return (
+    <div
+      className={`min-w-0 rounded-xl border px-3 py-2 ${
+        accent === "rose"
+          ? "border-rose-500/20 bg-rose-500/[0.04]"
+          : "border-white/10 bg-black/10"
+      }`}
+    >
+      <p className="text-[9px] uppercase tracking-[0.18em] text-slate-500">{label}</p>
+      <p className="mt-0.5 line-clamp-2 text-xs font-semibold leading-4 text-white">{value}</p>
+      {hint ? <p className="mt-0.5 text-[10px] text-slate-400">{hint}</p> : null}
+    </div>
+  );
+}
+
 function GapCard({ gap, index }: { gap: Gap; index: number }) {
   const priorityTone =
     gap.importance === "High" ? "border-rose-500/25 bg-rose-500/10"
@@ -291,143 +400,168 @@ function buildRejectionSignals(job: JobMatch): string[] {
 
 function RoleInsightModal({ job, onClose }: { job: JobMatch | null; onClose: () => void }) {
   if (!job) return null;
-  const matched = job.skills.filter((s) => s.status === "matched");
-  const partial = job.skills.filter((s) => s.status === "partial");
-  const missing = job.skills.filter((s) => s.status === "missing");
-  const whyThisRole = job.whyThisRole.length > 0 ? job.whyThisRole : buildAcceptanceSignals(job);
-  const rejectionSignals = buildRejectionSignals(job);
+
+  const matched = job.skills.filter((s) => s.status === "matched").slice(0, 9);
+  const missing = job.skills.filter((s) => s.status === "missing").slice(0, 7);
+  const whyThisRole = (job.whyThisRole.length > 0 ? job.whyThisRole : buildAcceptanceSignals(job)).slice(0, 3);
+  const rejectionSignals = buildRejectionSignals(job).slice(0, 2);
+
+  const sb = job.scoreBreakdown;
+  const scoreTiles = [
+    { label: "Semantic", value: sb.semanticMatchPercent },
+    { label: "Skills", value: sb.weightedSkillPercent },
+    { label: "Overlap", value: sb.exactOverlapPercent },
+    { label: "Category", value: sb.categoryAlignmentPercent },
+    ...(sb.demandScore != null ? [{ label: "Demand", value: sb.demandScore * 100 }] : []),
+    ...(sb.experienceAlignmentScore != null ? [{ label: "Exp. Fit", value: sb.experienceAlignmentScore * 100 }] : []),
+  ];
+
+  const expSig = getExperienceLabel(job.experienceAlignmentScore);
+  const demSig = getDemandLabel(job.demandScore);
+  const salSig = getSalaryLabel(job.salaryScore);
+  const signalChips = [expSig, demSig, salSig].filter(Boolean) as Array<{ label: string; color: string }>;
+
   return (
     <AnimatePresence>
       <motion.div
-        className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm"
+        className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-3 backdrop-blur-sm"
         initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        onClick={onClose}
       >
         <motion.div
-          initial={{ opacity: 0, y: 22, scale: 0.98 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 18, scale: 0.98 }}
-          transition={{ duration: 0.24 }}
-          className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-3xl border border-white/10 bg-slate-950 p-6 shadow-2xl"
+          initial={{ opacity: 0, scale: 0.97 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.97 }}
+          transition={{ duration: 0.22 }}
+          className="flex h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-white/10 bg-slate-950 shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
         >
-          <div className="flex items-start justify-between gap-4">
+          {/* ── Fixed header ── */}
+          <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 p-5">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-accent/80">Role recommendation</p>
-              <h3 className="mt-2 text-2xl font-semibold text-white">{job.title}</h3>
-              <p className="mt-2 text-sm text-slate-300">{job.category} • {pct(job.matchPercent)} match</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-accent/80">Role recommendation</p>
+              <h3 className="mt-1 text-xl font-semibold text-white">{job.title}</h3>
+              <p className="mt-1 text-[11px] text-slate-400">
+                {job.category}
+                <span className="mx-1.5 text-slate-600">•</span>
+                {pct(job.matchPercent)} match
+                {signalChips.map((chip, i) => (
+                  <span key={i}>
+                    <span className="mx-1.5 text-slate-600">•</span>
+                    <span className={chip.color}>{chip.label}</span>
+                  </span>
+                ))}
+              </p>
             </div>
-            <button type="button" onClick={onClose} className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-sm font-medium text-white transition hover:bg-white/10">Close</button>
+            <button type="button" onClick={onClose}
+              className="shrink-0 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/10">
+              Close
+            </button>
           </div>
-          <div className="mt-8 grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-            <div className="space-y-6">
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-                <h4 className="text-lg font-semibold text-white">Why you are a fit</h4>
-                <ul className="mt-4 space-y-3 text-sm leading-6 text-slate-300">
-                  {whyThisRole.map((line, index) => (
-                    <li key={`fit-${index}`} className="flex gap-3">
-                      <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-400" />
-                      <span>{line}</span>
+
+          {/* ── Body: 2-col grid ── */}
+          <div className="flex min-h-0 flex-1 overflow-hidden">
+
+            {/* LEFT: Why fit + Matched skills + Score tiles */}
+            <div className="flex w-1/2 shrink-0 flex-col gap-4 overflow-y-auto border-r border-white/10 p-5">
+              <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.04] p-4">
+                <h4 className="text-sm font-semibold text-emerald-300">Why you are a fit</h4>
+                <ul className="mt-3 space-y-2.5">
+                  {whyThisRole.map((line, i) => (
+                    <li key={i} className="flex gap-2.5 text-sm leading-5 text-slate-300">
+                      <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-emerald-400" />
+                      <span className="line-clamp-2">{line}</span>
                     </li>
                   ))}
                 </ul>
               </div>
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-                <h4 className="text-lg font-semibold text-white">Why you may be rejected</h4>
-                <ul className="mt-4 space-y-3 text-sm leading-6 text-slate-300">
-                  {rejectionSignals.map((line, index) => (
-                    <li key={`risk-${index}`} className="flex gap-3">
-                      <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-rose-400" />
-                      <span>{line}</span>
-                    </li>
-                  ))}
-                </ul>
+
+              {matched.length > 0 && (
+                <div>
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-400">Matched skills</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {matched.map((s) => (
+                      <span key={s.name} className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-200">
+                        {s.name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Score breakdown</p>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {scoreTiles.map(({ label, value }) => {
+                    const v = Math.round(value);
+                    const col =
+                      v >= 70 ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300"
+                      : v >= 40 ? "border-amber-500/25 bg-amber-500/10 text-amber-300"
+                      : "border-rose-500/25 bg-rose-500/10 text-rose-300";
+                    return (
+                      <div key={label} className={`rounded-xl border px-2 py-2 text-center ${col}`}>
+                        <p className="text-sm font-bold">{v}%</p>
+                        <p className="mt-0.5 text-[9px] opacity-70">{label}</p>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
-            <div className="space-y-6">
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-                <h4 className="text-lg font-semibold text-white">Score breakdown</h4>
-                <div className="mt-5 space-y-4">
-                  <BreakdownBar label="Semantic fit" value={job.scoreBreakdown.semanticMatchPercent} />
-                  <BreakdownBar label="Skill coverage" value={job.scoreBreakdown.weightedSkillPercent} />
-                  <BreakdownBar label="Exact overlap" value={job.scoreBreakdown.exactOverlapPercent} />
-                  <BreakdownBar label="Category alignment" value={job.scoreBreakdown.categoryAlignmentPercent} />
-                  {job.scoreBreakdown.demandScore != null && (
-                    <BreakdownBar
-                      label="Market demand"
-                      value={job.scoreBreakdown.demandScore * 100}
-                      colorClass="bg-amber-400"
-                    />
-                  )}
-                  {job.scoreBreakdown.experienceAlignmentScore != null && (
-                    <BreakdownBar
-                      label="Experience fit"
-                      value={job.scoreBreakdown.experienceAlignmentScore * 100}
-                      colorClass="bg-sky-400"
-                    />
-                  )}
-                  {job.scoreBreakdown.salaryScore != null && (
-                    <BreakdownBar
-                      label="Salary signal"
-                      value={job.scoreBreakdown.salaryScore * 100}
-                      colorClass="bg-emerald-400"
-                    />
-                  )}
-                </div>
+
+            {/* RIGHT: Risks + Missing + Partial skills */}
+            <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-5">
+              <div className="rounded-2xl border border-rose-500/20 bg-rose-500/[0.04] p-4">
+                <h4 className="text-sm font-semibold text-rose-300">Why you may be rejected</h4>
+                <ul className="mt-3 space-y-2.5">
+                  {rejectionSignals.map((line, i) => (
+                    <li key={i} className="flex gap-2.5 text-sm leading-5 text-slate-300">
+                      <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-rose-400" />
+                      <span className="line-clamp-2">{line}</span>
+                    </li>
+                  ))}
+                </ul>
               </div>
 
-              {/* ── Phase-2: Ranking factor explanations ── */}
-              {(() => {
-                const lines: Array<{ dot: string; text: string }> = [];
-                const demand = job.scoreBreakdown.demandScore;
-                const expFit = job.scoreBreakdown.experienceAlignmentScore;
-                const salary = job.scoreBreakdown.salaryScore;
-
-                if (demand != null && demand >= 0.65)
-                  lines.push({
-                    dot: "bg-amber-400",
-                    text:
-                      demand >= 0.85
-                        ? "High market demand boosted this role's ranking."
-                        : "Solid market demand contributed to this recommendation.",
-                  });
-
-                if (expFit != null && expFit >= 0.75)
-                  lines.push({
-                    dot: "bg-sky-400",
-                    text:
-                      expFit >= 0.9
-                        ? "Experience level closely matches your profile."
-                        : "Your experience level aligns well with this role.",
-                  });
-
-                if (salary != null && salary >= 0.6)
-                  lines.push({
-                    dot: "bg-emerald-400",
-                    text: "Salary competitiveness contributed slightly to this recommendation.",
-                  });
-
-                if (lines.length === 0) return null;
-                return (
-                  <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-                    <h4 className="text-base font-semibold text-white">Ranking factors</h4>
-                    <ul className="mt-4 space-y-3 text-sm leading-6 text-slate-300">
-                      {lines.map((l, i) => (
-                        <li key={i} className="flex gap-3">
-                          <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${l.dot}`} />
-                          <span>{l.text}</span>
-                        </li>
-                      ))}
-                    </ul>
+              {missing.length > 0 && (
+                <div>
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-rose-400">Skills to acquire</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {missing.map((s) => (
+                      <span key={s.name} className="rounded-lg border border-rose-500/25 bg-rose-500/10 px-2.5 py-1 text-xs font-medium text-rose-200">
+                        {s.name}
+                      </span>
+                    ))}
                   </div>
-                );
-              })()}
-              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-                <h4 className="text-lg font-semibold text-white">Skill evidence</h4>
-                <div className="mt-5 space-y-5">
-                  <SkillGroup title="Strong match" skills={matched} />
-                  <SkillGroup title="Needs strengthening" skills={partial} />
-                  <SkillGroup title="Missing" skills={missing} />
                 </div>
-              </div>
+              )}
+
+              {job.skills.filter((s) => s.status === "partial").length > 0 && (
+                <div>
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-400">Needs strengthening</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {job.skills.filter((s) => s.status === "partial").slice(0, 6).map((s) => (
+                      <span key={s.name} className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-200">
+                        {s.name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {job.whyThisRole.length > 3 && (
+                <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-4">
+                  <h4 className="text-sm font-semibold text-white">Additional context</h4>
+                  <ul className="mt-3 space-y-2 text-sm leading-5 text-slate-300">
+                    {job.whyThisRole.slice(3, 5).map((line, i) => (
+                      <li key={i} className="flex gap-2.5">
+                        <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-accent/60" />
+                        <span className="line-clamp-2">{line}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           </div>
         </motion.div>
@@ -464,6 +598,25 @@ function JobMatchCard({ job, index, onOpenInsight }: { job: JobMatch; index: num
           <p className="text-[1.6rem] font-bold text-white leading-none mt-0.5">{pct(job.matchPercent)}</p>
         </div>
       </div>
+
+      {/* Inline signals */}
+      {(() => {
+        const expSig = getExperienceLabel(job.experienceAlignmentScore);
+        const demSig = getDemandLabel(job.demandScore);
+        const salSig = getSalaryLabel(job.salaryScore);
+        const chips = [expSig, demSig, salSig].filter(Boolean) as Array<{ label: string; color: string }>;
+        if (chips.length === 0) return null;
+        return (
+          <p className="mt-2 text-[10px] leading-none">
+            {chips.map((chip, i) => (
+              <span key={chip.label}>
+                {i > 0 && <span className="mx-1.5 text-slate-600">•</span>}
+                <span className={chip.color}>{chip.label}</span>
+              </span>
+            ))}
+          </p>
+        );
+      })()}
 
       {/* Compact metrics row */}
       <div className="mt-3 grid grid-cols-4 gap-1.5">
@@ -508,7 +661,7 @@ function JobMatchCard({ job, index, onOpenInsight }: { job: JobMatch; index: num
         <button
           type="button"
           onClick={() => onOpenInsight(job)}
-          className="w-full rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white shadow-[0_4px_20px_rgba(0,0,0,0.35)] transition hover:brightness-110 active:scale-[0.98] flex items-center justify-center gap-2"
+          className="w-full rounded-xl bg-blue-800 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_4px_20px_rgba(0,0,0,0.35)] transition hover:brightness-110 active:scale-[0.98] flex items-center justify-center gap-2"
         >
           View full recommendation
           <span className="opacity-70 text-base leading-none">→</span>
@@ -710,7 +863,7 @@ function SkillsDetailModal({
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 18, scale: 0.98 }}
           transition={{ duration: 0.24 }}
-          className="max-h-[88vh] w-full max-w-3xl overflow-y-auto rounded-3xl border border-white/10 bg-slate-950 p-6 shadow-2xl"
+          className="max-h-[88vh] w-full max-w-4xl overflow-y-auto rounded-3xl border border-white/10 bg-slate-950 p-6 shadow-2xl"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="mb-6 flex items-start justify-between gap-4">
@@ -739,7 +892,7 @@ function SkillsDetailModal({
               No trustworthy technical strengths were detected from this CV.
             </div>
           ) : (
-            <div className="space-y-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               {groupedSkills.map((group, index) => (
                 <motion.div
                   key={group.title}
@@ -929,38 +1082,65 @@ function GapsDetailModal({
 // ─── OverviewHeader (unchanged logic, same visual) ────────────────────────────
 
 function OverviewHeader({ analysis, readinessBand }: { analysis: AnalysisResponse; readinessBand: string }) {
+  const sb = analysis.topMatches[0]?.scoreBreakdown;
+  const skillStrength = sb ? (sb.semanticMatchPercent + sb.weightedSkillPercent) / 2 : 0;
+  const fitAlignment = sb ? (sb.exactOverlapPercent + sb.categoryAlignmentPercent) / 2 : 0;
+
   return (
     <Panel className="overflow-hidden p-4 md:p-[18px]" delay={0.04}>
-      <div className="grid gap-3 xl:grid-cols-[160px_minmax(0,1fr)] xl:items-start">
+      <div className="grid gap-4 xl:grid-cols-[140px_minmax(0,1fr)] xl:items-start">
         <div className="flex items-start justify-center xl:justify-start">
           <ReadinessRing score={analysis.readinessScore} label={readinessBand} />
         </div>
         <div className="space-y-3">
-          <div className="min-w-0 space-y-1.5">
+          <div className="min-w-0 space-y-1">
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-accent/80">Readiness snapshot</p>
-            <h2 className="text-[1.95rem] font-semibold leading-tight text-white">Profile overview</h2>
-            <p className="max-w-4xl text-sm leading-6 text-slate-300">A compact summary of your strongest direction, best current fit, next likely target, and highest recurring gap.</p>
+            <h2 className="text-[1.6rem] font-semibold leading-tight text-white">Profile overview</h2>
           </div>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <MetricTile
+          {/* 2 combined score boxes */}
+          <div className="grid grid-cols-2 gap-3">
+            <ScoreBox
+              title="Skill Strength"
+              iconNode={
+                <svg viewBox="0 0 14 14" className="h-3.5 w-3.5" fill="currentColor">
+                  <path d="M7 1a3.5 3.5 0 00-2.6 5.8L3 9l1 1 1.4-1.4.6.6A3.5 3.5 0 107 1zm0 5.5a2 2 0 110-4 2 2 0 010 4z" opacity="0.85"/>
+                </svg>
+              }
+              combined={skillStrength}
+              subs={[
+                { label: "Semantic", value: sb?.semanticMatchPercent ?? 0 },
+                { label: "Skills", value: sb?.weightedSkillPercent ?? 0 },
+              ]}
+            />
+            <ScoreBox
+              title="Fit Alignment"
+              iconNode={
+                <svg viewBox="0 0 14 14" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M1 4l6 3 6-3M1 8l6 3 6-3"/>
+                </svg>
+              }
+              combined={fitAlignment}
+              subs={[
+                { label: "Overlap", value: sb?.exactOverlapPercent ?? 0 },
+                { label: "Category", value: sb?.categoryAlignmentPercent ?? 0 },
+              ]}
+            />
+          </div>
+          {/* 3-col insight row */}
+          <div className="grid grid-cols-3 gap-2">
+            <InsightPill
               label="Best match"
-              value={analysis.insightSummary?.bestMatchTitle ?? analysis.topMatches[0]?.title ?? "Unknown"}
+              value={analysis.insightSummary?.bestMatchTitle ?? analysis.topMatches[0]?.title ?? "—"}
               hint={analysis.insightSummary ? `${pct(analysis.insightSummary.bestMatchPercent)} match` : null}
             />
-            <MetricTile
-              label="Strongest direction"
-              value={analysis.careerPath?.primaryPath ?? analysis.insightSummary?.strongestCategory ?? "Unknown"}
-              hint={analysis.careerPath?.summary ?? null}
-            />
-            <MetricTile
+            <InsightPill
               label="Next role"
-              value={analysis.nextRole?.stretchRole ?? analysis.nextRole?.currentBestFit ?? "Unknown"}
-              hint={analysis.nextRole?.summary ?? null}
+              value={analysis.nextRole?.stretchRole ?? analysis.nextRole?.currentBestFit ?? "—"}
             />
-            <MetricTile
+            <InsightPill
               label="Main gap"
-              value={analysis.insightSummary?.mainGap ?? "No critical gap detected"}
-              hint="Highest recurring weakness across your strongest matches."
+              value={analysis.insightSummary?.mainGap ?? "No critical gap"}
+              accent="rose"
             />
           </div>
         </div>
@@ -1261,8 +1441,8 @@ export function ResultsSection({ analysis }: { analysis: AnalysisResponse }) {
     "Career readiness";
 
   const topMatchesToShow = showAllMatches
-    ? analysis.topMatches
-    : analysis.topMatches.slice(0, 3);
+    ? analysis.topMatches.slice(0, 10)
+    : analysis.topMatches.slice(0, 4);
 
   return (
     <div className="w-full overflow-x-hidden px-1 py-3 md:px-2 md:py-4">
@@ -1313,13 +1493,13 @@ export function ResultsSection({ analysis }: { analysis: AnalysisResponse }) {
                     Gaps ↗
                   </button>
                 </div>
-                {analysis.topMatches.length > 3 ? (
+                {analysis.topMatches.length > 4 ? (
                   <button
                     type="button"
                     onClick={() => setShowAllMatches((prev) => !prev)}
                     className="shrink-0 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/10"
                   >
-                    {showAllMatches ? "Show fewer roles" : `Show all ${analysis.topMatches.length} roles`}
+                    {showAllMatches ? "Show fewer roles" : `Show all ${Math.min(analysis.topMatches.length, 10)} roles`}
                   </button>
                 ) : null}
               </div>
