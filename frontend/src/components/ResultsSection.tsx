@@ -210,27 +210,29 @@ function SkillGroup({ title, skills }: { title: string; skills: Skill[] }) {
 
 // ─── Score signal label helpers ───────────────────────────────────────────────
 
-function getExperienceLabel(score: number | undefined): { label: string; color: string } | null {
+type SignalChip = { label: string; color: string; badge: string };
+
+function getExperienceLabel(score: number | undefined): SignalChip | null {
   if (score == null) return null;
-  if (score >= 0.9) return { label: "Senior Level", color: "text-emerald-400" };
-  if (score >= 0.7) return { label: "Mid-Level", color: "text-sky-400" };
-  if (score >= 0.4) return { label: "Entry Level", color: "text-amber-400" };
-  return { label: "Stretch Role", color: "text-rose-400" };
+  if (score >= 0.9) return { label: "Senior Level",  color: "text-emerald-400", badge: "border-emerald-500/40 bg-emerald-500/[0.12] text-emerald-300 shadow-[0_0_10px_rgba(16,185,129,0.14)]" };
+  if (score >= 0.7) return { label: "Mid-Level",     color: "text-sky-400",     badge: "border-sky-500/40 bg-sky-500/[0.12] text-sky-300 shadow-[0_0_10px_rgba(14,165,233,0.12)]" };
+  if (score >= 0.4) return { label: "Entry Level",   color: "text-amber-400",   badge: "border-amber-500/40 bg-amber-500/[0.12] text-amber-300" };
+  return              { label: "Stretch Role",  color: "text-rose-400",    badge: "border-rose-500/40 bg-rose-500/[0.12] text-rose-300" };
 }
 
-function getDemandLabel(score: number | undefined): { label: string; color: string } | null {
+function getDemandLabel(score: number | undefined): SignalChip | null {
   if (score == null) return null;
-  if (score >= 0.85) return { label: "High Demand", color: "text-emerald-400" };
-  if (score >= 0.65) return { label: "Growing Demand", color: "text-sky-400" };
-  if (score >= 0.4) return { label: "Stable Market", color: "text-amber-400" };
-  return { label: "Low Demand", color: "text-rose-400" };
+  if (score >= 0.85) return { label: "High Demand",    color: "text-emerald-400", badge: "border-emerald-500/40 bg-emerald-500/[0.12] text-emerald-300 shadow-[0_0_10px_rgba(16,185,129,0.14)]" };
+  if (score >= 0.65) return { label: "Growing Demand", color: "text-sky-400",     badge: "border-sky-500/40 bg-sky-500/[0.12] text-sky-300" };
+  if (score >= 0.4)  return { label: "Stable Market",  color: "text-amber-400",   badge: "border-amber-500/40 bg-amber-500/[0.12] text-amber-300" };
+  return               { label: "Low Demand",    color: "text-rose-400",    badge: "border-rose-500/40 bg-rose-500/[0.12] text-rose-300" };
 }
 
-function getSalaryLabel(score: number | undefined): { label: string; color: string } | null {
+function getSalaryLabel(score: number | undefined): SignalChip | null {
   if (score == null) return null;
-  if (score >= 0.7) return { label: "Competitive Salary", color: "text-emerald-400" };
-  if (score >= 0.4) return { label: "Average Salary", color: "text-amber-400" };
-  return { label: "Below Market", color: "text-rose-400" };
+  if (score >= 0.7) return { label: "Competitive Salary", color: "text-emerald-400", badge: "border-emerald-500/40 bg-emerald-500/[0.12] text-emerald-300 shadow-[0_0_10px_rgba(16,185,129,0.14)]" };
+  if (score >= 0.4) return { label: "Average Salary",     color: "text-amber-400",   badge: "border-amber-500/40 bg-amber-500/[0.12] text-amber-300" };
+  return              { label: "Below Market",       color: "text-rose-400",    badge: "border-rose-500/40 bg-rose-500/[0.12] text-rose-300" };
 }
 
 // ─── ScoreBox: combined metric card with progress bar ─────────────────────────
@@ -571,15 +573,20 @@ function RoleInsightModal({ job, onClose }: { job: JobMatch | null; onClose: () 
 }
 
 function JobMatchCard({ job, index, onOpenInsight }: { job: JobMatch; index: number; onOpenInsight: (job: JobMatch) => void }) {
-  const matched = job.skills.filter((s) => s.status === "matched").slice(0, 6);
-  const partial = job.skills.filter((s) => s.status === "partial").slice(0, 5);
-  const missing = job.skills.filter((s) => s.status === "missing").slice(0, 5);
-  const metrics = [
-    { label: "Semantic", value: job.scoreBreakdown.semanticMatchPercent },
-    { label: "Skills", value: job.scoreBreakdown.weightedSkillPercent },
-    { label: "Overlap", value: job.scoreBreakdown.exactOverlapPercent },
-    { label: "Category", value: job.scoreBreakdown.categoryAlignmentPercent },
+  const matched = job.skills.filter((s) => s.status === "matched").slice(0, 5);
+  const missing = job.skills.filter((s) => s.status === "missing").slice(0, 4);
+
+  const expSig = getExperienceLabel(job.experienceAlignmentScore);
+  const demSig = getDemandLabel(job.demandScore);
+  const salSig = getSalaryLabel(job.salaryScore);
+  const signalChips = [expSig, demSig, salSig].filter(Boolean) as SignalChip[];
+
+  const sb = job.scoreBreakdown;
+  const metricPairs = [
+    { label: "Match Strength", value: (sb.semanticMatchPercent + sb.weightedSkillPercent) / 2 },
+    { label: "Fit Quality",    value: (sb.exactOverlapPercent + sb.categoryAlignmentPercent) / 2 },
   ];
+
   return (
     <motion.article
       initial={{ opacity: 0, y: 14 }}
@@ -590,66 +597,69 @@ function JobMatchCard({ job, index, onOpenInsight }: { job: JobMatch; index: num
       {/* Header */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <span className="inline-flex rounded-full border border-accent/20 bg-accent/10 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">{job.category}</span>
-          <h3 className="mt-1.5 text-[1.1rem] font-semibold text-white leading-snug">{job.title}</h3>
+          <span className="inline-flex rounded-full border border-accent/20 bg-accent/10 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
+            {job.category}
+          </span>
+          <h3 className="mt-1.5 text-[1.05rem] font-semibold text-white leading-snug">{job.title}</h3>
         </div>
-        <div className="shrink-0 rounded-xl border border-white/10 bg-black/15 px-3 py-1.5 text-center min-w-[68px]">
+        <div className="shrink-0 rounded-xl border border-white/10 bg-black/15 px-3 py-1.5 text-center min-w-[64px]">
           <p className="text-[9px] uppercase tracking-[0.16em] text-slate-400">Match</p>
-          <p className="text-[1.6rem] font-bold text-white leading-none mt-0.5">{pct(job.matchPercent)}</p>
+          <p className="text-[1.5rem] font-bold text-white leading-none mt-0.5">{pct(job.matchPercent)}</p>
         </div>
       </div>
 
-      {/* Inline signals */}
-      {(() => {
-        const expSig = getExperienceLabel(job.experienceAlignmentScore);
-        const demSig = getDemandLabel(job.demandScore);
-        const salSig = getSalaryLabel(job.salaryScore);
-        const chips = [expSig, demSig, salSig].filter(Boolean) as Array<{ label: string; color: string }>;
-        if (chips.length === 0) return null;
-        return (
-          <p className="mt-2 text-[10px] leading-none">
-            {chips.map((chip, i) => (
-              <span key={chip.label}>
-                {i > 0 && <span className="mx-1.5 text-slate-600">•</span>}
-                <span className={chip.color}>{chip.label}</span>
-              </span>
-            ))}
-          </p>
-        );
-      })()}
+      {/* Signal pill badges — primary visual */}
+      {signalChips.length > 0 && (
+        <div className="mt-2.5 flex flex-wrap gap-1.5">
+          {signalChips.map((chip) => (
+            <span
+              key={chip.label}
+              className={`inline-flex rounded-full border px-2.5 py-0.5 text-[10px] font-semibold ${chip.badge}`}
+            >
+              {chip.label}
+            </span>
+          ))}
+        </div>
+      )}
 
-      {/* Compact metrics row */}
-      <div className="mt-3 grid grid-cols-4 gap-1.5">
-        {metrics.map(({ label, value }) => (
-          <div key={label} className="rounded-lg border border-white/10 bg-black/10 px-2 py-2 text-center">
-            <p className="text-[9px] text-slate-500 leading-tight truncate">{label}</p>
-            <p className="mt-0.5 text-[0.82rem] font-semibold text-white">{pct(value)}</p>
-          </div>
-        ))}
+      {/* 2-block metric row */}
+      <div className="mt-2.5 grid grid-cols-2 gap-2">
+        {metricPairs.map(({ label, value }) => {
+          const v = Math.round(Math.max(0, Math.min(100, value)));
+          const barColor = v >= 70 ? "bg-emerald-500/60" : v >= 40 ? "bg-amber-500/60" : "bg-rose-500/60";
+          return (
+            <div key={label} className="rounded-xl border border-white/10 bg-black/10 px-3 py-2">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10px] text-slate-400">{label}</span>
+                <span className="text-[11px] font-bold text-white">{v}%</span>
+              </div>
+              <div className="h-1 overflow-hidden rounded-full bg-white/10">
+                <motion.div
+                  initial={{ width: 0 }}
+                  animate={{ width: `${v}%` }}
+                  transition={{ duration: 0.55, ease: "easeOut", delay: index * 0.04 + 0.1 }}
+                  className={`h-full rounded-full ${barColor}`}
+                />
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       {/* Skill groups — compact, capped */}
-      <div className="mt-3 space-y-2 flex-1">
+      <div className="mt-2.5 space-y-1.5 flex-1">
         {matched.length > 0 && (
           <div>
-            <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-400/80">Strong match</p>
-            <div className="flex flex-wrap gap-1.5">
+            <p className="mb-1 text-[9px] font-semibold uppercase tracking-[0.16em] text-emerald-400/80">Strong match</p>
+            <div className="flex flex-wrap gap-1">
               {matched.map((s) => <SkillBadge key={`m-${s.name}`} skill={s} />)}
-            </div>
-          </div>
-        )}
-        {partial.length > 0 && (
-          <div>
-            <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-400/80">Needs strengthening</p>
-            <div className="flex flex-wrap gap-1.5">
-              {partial.map((s) => <SkillBadge key={`p-${s.name}`} skill={s} />)}
             </div>
           </div>
         )}
         {missing.length > 0 && (
           <div>
-            <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-rose-400/80">Missing</p>
-            <div className="flex flex-wrap gap-1.5">
+            <p className="mb-1 text-[9px] font-semibold uppercase tracking-[0.16em] text-rose-400/80">Missing</p>
+            <div className="flex flex-wrap gap-1">
               {missing.map((s) => <SkillBadge key={`x-${s.name}`} skill={s} />)}
             </div>
           </div>
@@ -657,11 +667,11 @@ function JobMatchCard({ job, index, onOpenInsight }: { job: JobMatch; index: num
       </div>
 
       {/* Primary CTA */}
-      <div className="mt-4 pt-3 border-t border-white/10">
+      <div className="mt-3 pt-2.5 border-t border-white/10">
         <button
           type="button"
           onClick={() => onOpenInsight(job)}
-          className="w-full rounded-xl bg-blue-800 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_4px_20px_rgba(0,0,0,0.35)] transition hover:brightness-110 active:scale-[0.98] flex items-center justify-center gap-2"
+          className="w-full rounded-xl bg-blue-800 px-4 py-2 text-sm font-semibold text-white shadow-[0_4px_20px_rgba(0,0,0,0.35)] transition hover:brightness-110 active:scale-[0.98] flex items-center justify-center gap-2"
         >
           View full recommendation
           <span className="opacity-70 text-base leading-none">→</span>
@@ -1412,9 +1422,19 @@ function GapsSidebarWidget({
   );
 }
 
+type SortBy = "match" | "demand" | "salary" | "experience";
+
+const SORT_LABELS: Record<SortBy, string> = {
+  match:      "Best Match",
+  demand:     "Market Demand",
+  salary:     "Salary",
+  experience: "Experience Fit",
+};
+
 export function ResultsSection({ analysis }: { analysis: AnalysisResponse }) {
   const [selectedJob, setSelectedJob] = useState<JobMatch | null>(null);
-  const [showAllMatches, setShowAllMatches] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(4);
+  const [sortBy, setSortBy] = useState<SortBy>("match");
   const [showSkillsModal, setShowSkillsModal] = useState(false);
   const [showGapsModal, setShowGapsModal] = useState(false);
   const [sidebarsVisible, setSidebarsVisible] = useState(true);
@@ -1440,9 +1460,22 @@ export function ResultsSection({ analysis }: { analysis: AnalysisResponse }) {
     analysis.readinessBand ??
     "Career readiness";
 
-  const topMatchesToShow = showAllMatches
-    ? analysis.topMatches.slice(0, 10)
-    : analysis.topMatches.slice(0, 4);
+  const sortedMatches = useMemo(() => {
+    const all = [...analysis.topMatches];
+    if (sortBy === "demand")     return all.sort((a, b) => (b.demandScore ?? 0) - (a.demandScore ?? 0));
+    if (sortBy === "salary")     return all.sort((a, b) => (b.salaryScore ?? 0) - (a.salaryScore ?? 0));
+    if (sortBy === "experience") return all.sort((a, b) => (b.experienceAlignmentScore ?? 0) - (a.experienceAlignmentScore ?? 0));
+    return all; // "match" = original order
+  }, [analysis.topMatches, sortBy]);
+
+  const topMatchesToShow = sortedMatches.slice(0, visibleCount);
+  const canExpand = visibleCount < Math.min(sortedMatches.length, 20);
+  const canCollapse = visibleCount > 4 && sortedMatches.length > 4;
+
+  function handleSort(next: SortBy) {
+    setSortBy(next);
+    setVisibleCount(4);
+  }
 
   return (
     <div className="w-full overflow-x-hidden px-1 py-3 md:px-2 md:py-4">
@@ -1469,40 +1502,41 @@ export function ResultsSection({ analysis }: { analysis: AnalysisResponse }) {
             }`}
           >
             <Panel className="overflow-hidden p-4 md:p-5">
-              <div className="flex flex-wrap items-end justify-between gap-4">
-                <div className="min-w-0 flex-1">
-                  <SectionHeading
-                    eyebrow="Top matches"
-                    title="Best role matches"
-                  />
-                </div>
-                {/* Mobile: show compact widgets inline */}
+              {/* Panel header */}
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <SectionHeading eyebrow="Top matches" title="Best role matches" />
+                {/* Mobile skill/gap quick links */}
                 <div className="flex xl:hidden gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowSkillsModal(true)}
-                    className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300 transition hover:bg-emerald-500/20"
-                  >
+                  <button type="button" onClick={() => setShowSkillsModal(true)}
+                    className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300 transition hover:bg-emerald-500/20">
                     Skills ↗
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowGapsModal(true)}
-                    className="rounded-full border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300 transition hover:bg-rose-500/20"
-                  >
+                  <button type="button" onClick={() => setShowGapsModal(true)}
+                    className="rounded-full border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300 transition hover:bg-rose-500/20">
                     Gaps ↗
                   </button>
                 </div>
-                {analysis.topMatches.length > 4 ? (
-                  <button
-                    type="button"
-                    onClick={() => setShowAllMatches((prev) => !prev)}
-                    className="shrink-0 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/10"
-                  >
-                    {showAllMatches ? "Show fewer roles" : `Show all ${Math.min(analysis.topMatches.length, 10)} roles`}
-                  </button>
-                ) : null}
               </div>
+
+              {/* Sort controls */}
+              <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                {(Object.keys(SORT_LABELS) as SortBy[]).map((opt) => (
+                  <button
+                    key={opt}
+                    type="button"
+                    onClick={() => handleSort(opt)}
+                    className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
+                      sortBy === opt
+                        ? "bg-accent text-white shadow-[0_0_12px_rgba(99,102,241,0.28)]"
+                        : "border border-white/10 bg-white/5 text-slate-300 hover:bg-white/10"
+                    }`}
+                  >
+                    {SORT_LABELS[opt]}
+                  </button>
+                ))}
+              </div>
+
+              {/* Job grid */}
               <div className="mt-4 grid gap-4 md:grid-cols-2">
                 {topMatchesToShow.length === 0 ? (
                   <div className="rounded-2xl border border-white/10 bg-black/10 p-5 text-sm leading-6 text-slate-300">
@@ -1514,6 +1548,21 @@ export function ResultsSection({ analysis }: { analysis: AnalysisResponse }) {
                   ))
                 )}
               </div>
+
+              {/* Show more / fewer */}
+              {(canExpand || canCollapse) && (
+                <div className="mt-4 flex justify-center">
+                  <button
+                    type="button"
+                    onClick={() => canExpand ? setVisibleCount(20) : setVisibleCount(4)}
+                    className="rounded-full border border-white/10 bg-white/5 px-5 py-2 text-sm font-medium text-white transition hover:bg-white/10"
+                  >
+                    {canExpand
+                      ? `Show all ${Math.min(sortedMatches.length, 20)} roles`
+                      : "Show fewer roles"}
+                  </button>
+                </div>
+              )}
             </Panel>
           </div>
 
