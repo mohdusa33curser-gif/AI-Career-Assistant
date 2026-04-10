@@ -13,7 +13,7 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 
 from models import JobRecord
-from skill_core import (
+from .skill_core import (
     SKILL_FAMILY_MAP,
     CATEGORY_SIGNATURE_SKILLS,
     canonicalize_skill,
@@ -120,28 +120,125 @@ def _normalize_experience_level(experience: str | None) -> float:
     return 0.7
 
 
+_LEVEL_RANK: Final[dict[str, int]] = {"junior": 0, "mid": 1, "senior": 2}
+
+
+def normalize_experience_level(value: str | None) -> str | None:
+    """Normalize raw DB experience_level to 'Junior' | 'Mid' | 'Senior' | None."""
+    if not value:
+        return None
+    key = value.strip().lower()
+    if key in ("junior", "entry", "entry-level", "entry level"):
+        return "Junior"
+    if key in ("mid", "mid-level", "mid level", "intermediate"):
+        return "Mid"
+    if key in ("senior", "lead", "principal", "staff", "expert"):
+        return "Senior"
+    return None
+
+
+def normalize_demand_level(value: str | None) -> str | None:
+    """Normalize raw DB demand_level to 'High' | 'Medium' | 'Low' | None."""
+    if not value:
+        return None
+    key = value.strip().lower()
+    if key in ("high", "growing"):
+        return "High"
+    if key in ("medium", "moderate", "stable"):
+        return "Medium"
+    if key in ("low", "declining"):
+        return "Low"
+    return None
+
+
+def normalize_salary_level(value: str | None) -> str | None:
+    """Normalize raw DB salary_level to 'High' | 'Medium' | 'Low' | None."""
+    if not value:
+        return None
+    key = value.strip().lower()
+    if key == "high":
+        return "High"
+    if key in ("medium", "moderate"):
+        return "Medium"
+    if key == "low":
+        return "Low"
+    return None
+
+
+def map_demand_to_score(level: str | None) -> float:
+    """Map normalized demand level to [0,1] score."""
+    return {"High": 1.0, "Medium": 0.65, "Low": 0.35}.get(level or "", 0.5)
+
+
+def map_salary_to_score(level: str | None) -> float:
+    """Map normalized salary level to [0,1] score."""
+    return {"High": 1.0, "Medium": 0.65, "Low": 0.35}.get(level or "", 0.5)
+
+
+def map_experience_to_score(level: str | None) -> float:
+    """Map normalized experience level to [0,1] score."""
+    return {"Junior": 0.35, "Mid": 0.65, "Senior": 1.0}.get(level or "", 0.7)
+
+
 @dataclass(frozen=True)
 class JobSignals:
     """Extracted numeric signals from a job record for multi-factor ranking."""
     demand_score: float = 0.5
     salary_midpoint: float | None = None
     experience_level: float = 0.7
+    # Normalized text labels from DB columns (None when not available)
+    experience_level_label: str | None = None
+    demand_level_label: str | None = None
+    salary_level_label: str | None = None
+    # Direct salary score from DB level (overrides midpoint math when set)
+    salary_score_direct: float | None = None
 
 
 def enrich_job_signals(job_record: Any) -> JobSignals:
     """
     Extract and normalize demand, salary, and experience signals from a job record.
 
-    Falls back safely to neutral defaults for any missing or malformed fields.
+    Prefers structured DB columns (db_demand_level, db_experience_level,
+    db_salary_level) over legacy text fields. Falls back to neutral defaults.
     """
-    job_trend = getattr(job_record, "job_trend", None) or ""
-    salary_range = getattr(job_record, "salary_range", None) or ""
-    experience = getattr(job_record, "experience", None) or ""
+    # --- DB-structured signals (preferred) ---
+    raw_exp = getattr(job_record, "db_experience_level", None)
+    raw_demand = getattr(job_record, "db_demand_level", None)
+    raw_salary_lvl = getattr(job_record, "db_salary_level", None)
+
+    exp_label = normalize_experience_level(raw_exp)
+    demand_label = normalize_demand_level(raw_demand)
+    salary_label = normalize_salary_level(raw_salary_lvl)
+
+    if exp_label is not None:
+        exp_score = map_experience_to_score(exp_label)
+    else:
+        # fallback: legacy text field
+        experience = getattr(job_record, "experience", None) or ""
+        exp_score = _normalize_experience_level(experience)
+
+    if demand_label is not None:
+        demand_score = map_demand_to_score(demand_label)
+    else:
+        job_trend = getattr(job_record, "job_trend", None) or ""
+        demand_score = _normalize_job_trend(job_trend)
+
+    salary_score_direct: float | None = None
+    if salary_label is not None:
+        salary_score_direct = map_salary_to_score(salary_label)
+        salary_midpoint = None
+    else:
+        salary_range = getattr(job_record, "salary_range", None) or ""
+        salary_midpoint = _parse_salary_midpoint(salary_range)
 
     return JobSignals(
-        demand_score=_normalize_job_trend(job_trend),
-        salary_midpoint=_parse_salary_midpoint(salary_range),
-        experience_level=_normalize_experience_level(experience),
+        demand_score=demand_score,
+        salary_midpoint=salary_midpoint,
+        experience_level=exp_score,
+        experience_level_label=exp_label,
+        demand_level_label=demand_label,
+        salary_level_label=salary_label,
+        salary_score_direct=salary_score_direct,
     )
 
 
@@ -174,10 +271,13 @@ def calculate_salary_score(
     salary_max_in_pool: float = _SALARY_REFERENCE_MAX,
 ) -> float:
     """
-    Normalize salary midpoint to [0, 1] relative to a pool ceiling.
+    Normalize salary to [0, 1].
 
-    Returns 0.5 (neutral) when salary data is absent.
+    Uses direct DB salary level score when available; otherwise normalizes
+    salary midpoint relative to the pool ceiling. Returns 0.5 when absent.
     """
+    if signals.salary_score_direct is not None:
+        return signals.salary_score_direct
     if signals.salary_midpoint is None:
         return 0.5
     ref = max(salary_max_in_pool, 1.0)
@@ -191,8 +291,23 @@ def calculate_experience_alignment_score(
     """
     Score how well the user's inferred seniority matches the job's requirement.
 
-    Perfect match → 1.0; maximum distance (0.6) → 0.4.
+    When the job has a structured DB level label, uses discrete rank distance:
+      exact match → 1.0, one level apart → 0.70, two levels apart → 0.40.
+    Falls back to continuous distance math for legacy float-only signals.
     """
+    job_label = job_signals.experience_level_label
+    if job_label is not None:
+        # Map user float to nearest discrete rank
+        if user_level >= 0.85:
+            user_rank = 2  # Senior
+        elif user_level >= 0.55:
+            user_rank = 1  # Mid
+        else:
+            user_rank = 0  # Junior
+        job_rank = _LEVEL_RANK.get(job_label.lower(), 1)
+        distance = abs(user_rank - job_rank)
+        return {0: 1.0, 1: 0.70, 2: 0.40}.get(distance, 0.40)
+    # Fallback: continuous distance
     alignment = 1.0 - abs(user_level - job_signals.experience_level)
     return max(0.0, min(1.0, alignment))
 
@@ -241,12 +356,12 @@ def _coerce_weight(value: Any) -> float:
 def _normalize_profile_fragment(value: str | None) -> str:
     if not value:
         return ""
-    from skill_core import normalize_whitespace
+    from .skill_core import normalize_whitespace
     return normalize_whitespace(str(value))
 
 
 def _truncate_profile_text(text: str, max_chars: int = SEMANTIC_TEXT_MAX_CHARS) -> str:
-    from skill_core import normalize_whitespace
+    from .skill_core import normalize_whitespace
     cleaned = normalize_whitespace(text or "")
     if len(cleaned) <= max_chars:
         return cleaned
@@ -763,23 +878,23 @@ def calculate_enhanced_hybrid_score(
     """
     Multi-factor hybrid score integrating market demand, experience fit, and salary signals.
 
-    Phase-2 weights:
-      semantic              0.40
+    Phase-3 weights (DB signals active):
+      semantic              0.35
       weighted_skill        0.25
       exact_overlap         0.10
-      category_alignment    0.10
-      demand_score          0.10
-      experience_alignment  0.05
+      category_alignment    0.05
+      demand_score          0.12
+      experience_alignment  0.08
       salary_score          0.05
     All inputs must be in [0, 1]; result is clamped to [0, 1].
     """
     score = (
-        0.40 * semantic_score
+        0.35 * semantic_score
         + 0.25 * weighted_skill_score
         + 0.10 * exact_overlap_score
-        + 0.10 * category_alignment_score
-        + 0.10 * demand_score
-        + 0.05 * experience_alignment_score
+        + 0.05 * category_alignment_score
+        + 0.12 * demand_score
+        + 0.08 * experience_alignment_score
         + 0.05 * salary_score
     )
     return max(0.0, min(1.0, score))
@@ -1088,9 +1203,16 @@ __all__ = [
     "_JOB_TREND_NUMERIC",
     "_EXPERIENCE_LEVEL_NUMERIC",
     "_SALARY_REFERENCE_MAX",
+    "_LEVEL_RANK",
     "_parse_salary_midpoint",
     "_normalize_job_trend",
     "_normalize_experience_level",
+    "normalize_experience_level",
+    "normalize_demand_level",
+    "normalize_salary_level",
+    "map_experience_to_score",
+    "map_demand_to_score",
+    "map_salary_to_score",
     "JobSignals",
     "enrich_job_signals",
     "infer_user_experience_level",

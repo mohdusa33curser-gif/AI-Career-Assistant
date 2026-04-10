@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, ForeignKey
 from sqlalchemy.orm import relationship
-from db.connection import Base
+from database.connection import Base
 
 
 class Job(Base):

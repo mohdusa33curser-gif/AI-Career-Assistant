@@ -12,7 +12,7 @@ import numpy as np
 
 from models import JobRecord
 from utils import clean_optional_text
-from skill_core import (
+from .skill_core import (
     SKILL_ALIAS_MAP,
     SKILL_FAMILY_MAP,
     SKILL_EXTRACTION_BLOCKLIST_LOWER,
@@ -27,8 +27,8 @@ from skill_core import (
     aliases_for_canonical_key,
     _skill_surface_forms,
 )
-from dataset import collect_canonical_vocabulary
-from matching import (
+from .dataset import collect_canonical_vocabulary
+from .matching import (
     SkillGapEntry,
     ScoredJob,
     get_text_embedding,
@@ -920,12 +920,37 @@ def _aggregate_priority_gaps(top_jobs: list[dict[str, Any]]) -> list[dict[str, A
 # Main analysis entry point
 # ---------------------------------------------------------------------------
 
+def _compute_sort_key(job: dict[str, Any], sort_by: str) -> float:
+    """
+    Compute a composite sort key for a job dict given the requested sort mode.
+
+    sort_by modes:
+      "match"      — pure hybrid score (default)
+      "demand"     — demand-boosted: demand * 0.65 + match * 0.35
+      "salary"     — salary-boosted: salary * 0.65 + match * 0.35
+      "experience" — experience-boosted: experience_alignment * 0.65 + match * 0.35
+    """
+    match = float(job.get("match_percent", 0)) / 100.0
+    demand = float(job.get("demand_score", 0.5))
+    salary = float(job.get("salary_score", 0.5))
+    exp = float(job.get("experience_alignment_score", 0.5))
+
+    if sort_by == "demand":
+        return demand * 0.65 + match * 0.35
+    if sort_by == "salary":
+        return salary * 0.65 + match * 0.35
+    if sort_by == "experience":
+        return exp * 0.65 + match * 0.35
+    return match  # "match" — default
+
+
 def analyze_cv_skills(
     user_skills: dict[str, Any],
     jobs: list[Any],
     top_k: int = 10,
     cv_text: str | None = None,
     job_embedding_lookup: dict[int, np.ndarray] | None = None,
+    sort_by: str = "match",
 ) -> dict[str, Any]:
     base_user_skill_weights = _build_user_skill_weights(user_skills)
 
@@ -1056,12 +1081,16 @@ def analyze_cv_skills(
                 "demand_score": round(demand_score, 4),
                 "experience_alignment_score": round(exp_alignment_score, 4),
                 "salary_score": round(sal_score, 4),
+                # DB structured text labels (None when not available)
+                "experience_level": job_signals.experience_level_label,
+                "demand_level": job_signals.demand_level_label,
+                "salary_level": job_signals.salary_level_label,
             }
         )
 
     ranked_jobs.sort(
         key=lambda item: (
-            -float(item["match_percent"]),
+            -_compute_sort_key(item, sort_by),
             -float(item["score_breakdown"]["semantic_match_percent"]),
             -float(item["score_breakdown"]["weighted_skill_percent"]),
             str(item["job_title"]),

@@ -6,6 +6,21 @@ import logging
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 
+from core.dataset import load_jobs_from_db, JobDatasetService, get_settings, collect_canonical_vocabulary
+from core.cv_analysis import (
+    analyze_cv_skills,
+    clean_cv_text,
+    extract_skills_from_cv_text,
+    extract_text_from_pdf_bytes,
+    prepare_display_extracted_skills,
+    vocabulary_sample_for_debug,
+    skill_labels_to_weight_map,
+)
+from core.skill_core import (
+    canonicalize_skill,
+    display_label_for_canonical,
+    apply_skill_display_to_analysis_payload,
+)
 from models import (
     AnalyzeCVResponse,
     AnalyzeSkillsRequest,
@@ -15,21 +30,6 @@ from models import (
     HealthResponse,
     SampleSkillsVocabularyResponse,
     summary_to_response,
-)
-from services import (
-    JobDatasetService,
-    analyze_cv_skills,
-    apply_skill_display_to_analysis_payload,
-    canonicalize_skill,
-    clean_cv_text,
-    collect_canonical_vocabulary,
-    display_label_for_canonical,
-    extract_skills_from_cv_text,
-    extract_text_from_pdf_bytes,
-    get_settings,
-    skill_labels_to_weight_map,
-    vocabulary_sample_for_debug,
-    prepare_display_extracted_skills,
 )
 
 logger = logging.getLogger(__name__)
@@ -109,6 +109,7 @@ def _dataset_service(request: Request) -> JobDatasetService:
 def post_analyze_skills(
     body: AnalyzeSkillsRequest,
     request: Request,
+    sort_by: str = Query(default="match", description="Sort mode: match | demand | salary | experience"),
 ) -> AnalyzeSkillsResponse:
     service = _dataset_service(request)
     jobs = service.get_all_jobs()
@@ -120,6 +121,7 @@ def post_analyze_skills(
         jobs,
         top_k=body.top_k,
         job_embedding_lookup=job_embedding_lookup,
+        sort_by=sort_by,
     )
 
     display_payload = {
@@ -145,6 +147,7 @@ async def post_analyze_cv(
     request: Request,
     file: UploadFile = File(..., description="PDF curriculum vitae"),
     top_k: int = Query(10, ge=1, le=50, description="Number of top job matches to return."),
+    sort_by: str = Query(default="match", description="Sort mode: match | demand | salary | experience"),
 ) -> AnalyzeCVResponse:
     service = _dataset_service(request)
     jobs = service.get_all_jobs()
@@ -172,6 +175,7 @@ async def post_analyze_cv(
         top_k=top_k,
         cv_text=cleaned,
         job_embedding_lookup=job_embedding_lookup,
+        sort_by=sort_by,
     )
 
     if not extracted_skill_weights:

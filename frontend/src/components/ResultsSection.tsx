@@ -384,9 +384,9 @@ function buildAcceptanceSignals(job: JobMatch): string[] {
   const matched = job.skills.filter((s) => s.status === "matched").slice(0, 3);
   const partial = job.skills.filter((s) => s.status === "partial").slice(0, 2);
   const lines: string[] = [];
-  if (matched.length > 0) lines.push(`You already show strong evidence in ${matched.map((s) => s.name).join(", ")}.`);
-  if (job.scoreBreakdown.semanticMatchPercent >= 70) lines.push("Your project and experience language is semantically close to this role.");
-  if (partial.length > 0) lines.push(`You also have partial overlap in ${partial.map((s) => s.name).join(", ")}.`);
+  if (matched.length > 0) lines.push(`Strong coverage: ${matched.map((s) => s.name).join(", ")}.`);
+  if (job.scoreBreakdown.semanticMatchPercent >= 70) lines.push("High semantic fit with this role.");
+  if (partial.length > 0) lines.push(`Partial coverage: ${partial.map((s) => s.name).join(", ")}.`);
   return lines;
 }
 
@@ -394,9 +394,9 @@ function buildRejectionSignals(job: JobMatch): string[] {
   const missing = job.skills.filter((s) => s.status === "missing").slice(0, 4);
   const partial = job.skills.filter((s) => s.status === "partial").slice(0, 2);
   const lines: string[] = [];
-  if (missing.length > 0) lines.push(`You may be rejected for lacking ${missing.map((s) => s.name).join(", ")}.`);
-  if (partial.length > 0) lines.push(`Some important skills are present only partially: ${partial.map((s) => s.name).join(", ")}.`);
-  if (lines.length === 0) lines.push("This role is broadly aligned with your current profile.");
+  if (missing.length > 0) lines.push(`Missing: ${missing.map((s) => s.name).join(", ")}.`);
+  if (partial.length > 0) lines.push(`Partial: ${partial.map((s) => s.name).join(", ")}.`);
+  if (lines.length === 0) lines.push("Strong overall alignment.");
   return lines;
 }
 
@@ -441,7 +441,7 @@ function RoleInsightModal({ job, onClose }: { job: JobMatch | null; onClose: () 
           {/* ── Fixed header ── */}
           <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 p-5">
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-accent/80">Role recommendation</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-accent/80">{job.category}</p>
               <h3 className="mt-1 text-xl font-semibold text-white">{job.title}</h3>
               <p className="mt-1 text-[11px] text-slate-400">
                 {job.category}
@@ -467,7 +467,7 @@ function RoleInsightModal({ job, onClose }: { job: JobMatch | null; onClose: () 
             {/* LEFT: Why fit + Matched skills + Score tiles */}
             <div className="flex w-1/2 shrink-0 flex-col gap-4 overflow-y-auto border-r border-white/10 p-5">
               <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.04] p-4">
-                <h4 className="text-sm font-semibold text-emerald-300">Why you are a fit</h4>
+                <h4 className="text-sm font-semibold text-emerald-300">Why you fit</h4>
                 <ul className="mt-3 space-y-2.5">
                   {whyThisRole.map((line, i) => (
                     <li key={i} className="flex gap-2.5 text-sm leading-5 text-slate-300">
@@ -514,7 +514,7 @@ function RoleInsightModal({ job, onClose }: { job: JobMatch | null; onClose: () 
             {/* RIGHT: Risks + Missing + Partial skills */}
             <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-5">
               <div className="rounded-2xl border border-rose-500/20 bg-rose-500/[0.04] p-4">
-                <h4 className="text-sm font-semibold text-rose-300">Why you may be rejected</h4>
+                <h4 className="text-sm font-semibold text-rose-300">Risk factors</h4>
                 <ul className="mt-3 space-y-2.5">
                   {rejectionSignals.map((line, i) => (
                     <li key={i} className="flex gap-2.5 text-sm leading-5 text-slate-300">
@@ -553,7 +553,7 @@ function RoleInsightModal({ job, onClose }: { job: JobMatch | null; onClose: () 
 
               {job.whyThisRole.length > 3 && (
                 <div className="rounded-2xl border border-white/10 bg-white/[0.025] p-4">
-                  <h4 className="text-sm font-semibold text-white">Additional context</h4>
+                  <h4 className="text-sm font-semibold text-white">More signals</h4>
                   <ul className="mt-3 space-y-2 text-sm leading-5 text-slate-300">
                     {job.whyThisRole.slice(3, 5).map((line, i) => (
                       <li key={i} className="flex gap-2.5">
@@ -673,7 +673,7 @@ function JobMatchCard({ job, index, onOpenInsight }: { job: JobMatch; index: num
           onClick={() => onOpenInsight(job)}
           className="w-full rounded-xl bg-blue-800 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_4px_20px_rgba(0,0,0,0.35)] transition hover:brightness-110 active:scale-[0.98] flex items-center justify-center gap-2"
         >
-          View Recommendation →
+          Full breakdown →
         </button>
       </div>
     </motion.article>
@@ -754,7 +754,7 @@ function SkillsCompactWidget({
       </div>
 
       <p className="mt-3 text-[11px] text-slate-500 group-hover:text-slate-400 transition">
-        Click to explore all skill groups in detail →
+        View all groups →
       </p>
     </motion.button>
   );
@@ -838,7 +838,7 @@ function GapsCompactWidget({
       </div>
 
       <p className="mt-3 text-[11px] text-slate-500 group-hover:text-slate-400 transition">
-        Click to see detailed gap analysis →
+        View full analysis →
       </p>
     </motion.button>
   );
@@ -884,7 +884,7 @@ function SkillsDetailModal({
                 Verified skill groups
               </h3>
               <p className="mt-1 text-sm text-slate-400">
-                Grouped by domain for faster scanning.
+                Grouped by domain.
               </p>
             </div>
             <button
@@ -898,7 +898,7 @@ function SkillsDetailModal({
 
           {groupedSkills.length === 0 ? (
             <div className="rounded-2xl border border-white/10 bg-black/10 p-4 text-sm leading-6 text-slate-300">
-              No trustworthy technical strengths were detected from this CV.
+              No technical skills detected.
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -990,7 +990,7 @@ function GapsDetailModal({
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-rose-400/80">Skill Gaps Overview</p>
               <h3 className="mt-1 text-xl font-semibold text-white">What to close next</h3>
-              <p className="mt-0.5 text-xs text-slate-400">Recurring gaps across your top role matches, ranked by impact.</p>
+              <p className="mt-0.5 text-xs text-slate-400">Gaps across top matches, ranked by impact.</p>
             </div>
             <button type="button" onClick={onClose}
               className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-white/10 shrink-0">
@@ -1000,7 +1000,7 @@ function GapsDetailModal({
 
           {gaps.length === 0 ? (
             <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm text-emerald-100">
-              No major recurring gaps detected — your profile aligns well.
+              No critical gaps — strong overall alignment.
             </div>
           ) : (
             <div className="space-y-4">
@@ -1104,7 +1104,6 @@ function OverviewHeader({ analysis, readinessBand }: { analysis: AnalysisRespons
         <div className="space-y-3">
           <div className="min-w-0 space-y-1">
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-accent/80">Readiness snapshot</p>
-            <h2 className="text-[1.6rem] font-semibold leading-tight text-white">Profile overview</h2>
           </div>
           {/* 2 combined score boxes */}
           <div className="grid grid-cols-2 gap-3">
@@ -1229,8 +1228,7 @@ function ActionPlanPanel({
         {/* RIGHT: Content */}
         <div className="space-y-3">
           <div className="min-w-0 space-y-0.5">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-accent/80">What to do next</p>
-            <h2 className="text-[1.4rem] font-semibold leading-tight text-white">Your action plan</h2>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-accent/80">Action plan</p>
           </div>
 
           {/* Roadmap items */}
@@ -1274,7 +1272,7 @@ function ActionPlanPanel({
                   <div className="flex items-center gap-2 mb-2">
                     <span className="h-1.5 w-1.5 rounded-full bg-accent/60" />
                     <p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">
-                      Recommendation {index + 1}
+                      Insight
                     </p>
                   </div>
                   <h4 className="text-sm font-semibold text-white">{rec.title}</h4>
@@ -1518,10 +1516,24 @@ export function ResultsSection({ analysis }: { analysis: AnalysisResponse }) {
 
   const sortedMatches = useMemo(() => {
     const all = [...analysis.topMatches];
-    if (sortBy === "demand")     return all.sort((a, b) => (b.demandScore ?? 0) - (a.demandScore ?? 0));
-    if (sortBy === "salary")     return all.sort((a, b) => (b.salaryScore ?? 0) - (a.salaryScore ?? 0));
-    if (sortBy === "experience") return all.sort((a, b) => (b.experienceAlignmentScore ?? 0) - (a.experienceAlignmentScore ?? 0));
-    return all; // "match" = original order
+    const match = (j: typeof all[0]) => j.matchPercent / 100;
+
+    if (sortBy === "demand")
+      return all.sort((a, b) =>
+        ((b.demandScore ?? 0) * 0.65 + match(b) * 0.35) -
+        ((a.demandScore ?? 0) * 0.65 + match(a) * 0.35)
+      );
+    if (sortBy === "salary")
+      return all.sort((a, b) =>
+        ((b.salaryScore ?? 0) * 0.65 + match(b) * 0.35) -
+        ((a.salaryScore ?? 0) * 0.65 + match(a) * 0.35)
+      );
+    if (sortBy === "experience")
+      return all.sort((a, b) =>
+        ((b.experienceAlignmentScore ?? 0) * 0.65 + match(b) * 0.35) -
+        ((a.experienceAlignmentScore ?? 0) * 0.65 + match(a) * 0.35)
+      );
+    return all; // "match" = backend order
   }, [analysis.topMatches, sortBy]);
 
   const topMatchesToShow = sortedMatches.slice(0, visibleCount);
@@ -1562,7 +1574,7 @@ export function ResultsSection({ analysis }: { analysis: AnalysisResponse }) {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-accent/80">Top matches</p>
-                  <h2 className="text-base font-semibold text-white">Best role matches</h2>
+                  <h2 className="text-base font-semibold text-white">{sortedMatches.length} roles</h2>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="flex xl:hidden gap-1.5">
@@ -1583,7 +1595,7 @@ export function ResultsSection({ analysis }: { analysis: AnalysisResponse }) {
               <div className="mt-4 grid gap-4 md:grid-cols-2">
                 {topMatchesToShow.length === 0 ? (
                   <div className="rounded-2xl border border-white/10 bg-black/10 p-5 text-sm leading-6 text-slate-300">
-                    No ranked job matches were produced for this run.
+                    No role matches found.
                   </div>
                 ) : (
                   topMatchesToShow.map((job, index) => (

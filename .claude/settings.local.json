@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cp backend/api.py backend/api/routes.py)",
+      "Bash(cp backend/models.py backend/models/domain.py)",
+      "Bash(cp backend/dataset.py backend/core/dataset.py)",
+      "Bash(cp backend/matching.py backend/core/matching.py)",
+      "Bash(cp backend/cv_analysis.py backend/core/cv_analysis.py)",
+      "Bash(rm api.py cv_analysis.py dataset.py matching.py models.py skill_core.py utils.py services.py create_tables.py seed_jobs_smart.py rebalance_data.py models/models.py)",
+      "Bash(rm -rf db/ services/)"
+    ]
+  }
+}

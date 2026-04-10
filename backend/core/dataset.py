@@ -18,7 +18,7 @@ from sentence_transformers import SentenceTransformer
 
 from models import DatasetSummary, JobRecord, CanonicalSkillProfile
 from utils import clean_optional_text, split_pipe_values
-from skill_core import (
+from .skill_core import (
     canonicalize_skill_name,
     parse_skill_priority_pairs,
     prettify_skill_label,
@@ -458,7 +458,7 @@ def _format_db_salary_range(salary_min: int | None, salary_max: int | None) -> s
 
 def _orm_job_to_job_record(orm_job: Any) -> JobRecord:
     """Map a persisted ORM ``Job`` (with ``job_skills`` loaded) to a ``JobRecord``."""
-    from models.models import JobSkill as OrmJobSkill
+    from models.orm import JobSkill as OrmJobSkill
 
     links: list[OrmJobSkill] = sorted(
         orm_job.job_skills,
@@ -511,6 +511,9 @@ def _orm_job_to_job_record(orm_job: Any) -> JobRecord:
         job_trend=job_trend,
         final_skill_count=final_skill_count,
         source_row_index=int(orm_job.id),
+        db_experience_level=clean_optional_text(getattr(orm_job, "experience_level", None)) or None,
+        db_demand_level=clean_optional_text(getattr(orm_job, "demand_level", None)) or None,
+        db_salary_level=clean_optional_text(getattr(orm_job, "salary_level", None)) or None,
         core_skills_canonical=core_skills_canonical,
         description_skill_hints=description_skill_hints,
         merged_skill_profile=merged_skill_profile,
@@ -523,8 +526,8 @@ def load_jobs_from_db() -> list[JobRecord]:
 
     Returns an empty list when the database has no jobs or any error occurs.
     """
-    from db.connection import SessionLocal
-    from services.job_service import JobService
+    from database.connection import SessionLocal
+    from database.job_service import JobService
 
     session = SessionLocal()
     try:
@@ -613,7 +616,7 @@ class JobDatasetService:
         )
 
     def _build_semantic_cache(self, jobs: list[JobRecord]) -> None:
-        from matching import build_job_profile_text, encode_texts_to_embeddings
+        from .matching import build_job_profile_text, encode_texts_to_embeddings
 
         self._job_profile_text_by_row = {}
         self._job_embedding_by_row = {}

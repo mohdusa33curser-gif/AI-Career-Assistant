@@ -1,0 +1,40 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Backend FastAPI",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
+      "module": "uvicorn",
+      "cwd": "${workspaceFolder}/backend",
+      "args": [
+        "main:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000",
+        "--reload"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Frontend Vite",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run dev",
+      "cwd": "${workspaceFolder}/frontend"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Run CareerLens",
+      "configurations": [
+        "Backend FastAPI",
+        "Frontend Vite"
+      ],
+      "stopAll": true
+    }
+  ]
+}

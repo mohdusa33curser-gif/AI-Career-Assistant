@@ -48,7 +48,7 @@ function StudentModal({ onClose, onAnalysisComplete }: {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const response = await fetch(`${API_BASE}/analyze-cv?top_k=10`, {
+      const response = await fetch(`${API_BASE}/analyze-cv?top_k=20&sort_by=match`, {
         method: "POST",
         body: formData,
       });

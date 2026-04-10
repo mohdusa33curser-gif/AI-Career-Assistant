@@ -125,6 +125,11 @@ class JobRecord:
     # New fields for the next backend intelligence upgrade
     # These all have defaults so existing code will NOT break.
     # ------------------------------------------------------------------
+    # DB-structured signal fields (populated from ORM; None when loaded from CSV)
+    db_experience_level: str | None = None
+    db_demand_level: str | None = None
+    db_salary_level: str | None = None
+
     core_skills_canonical: set[str] = field(default_factory=set)
     description_skill_hints: set[str] = field(default_factory=set)
     merged_skill_profile: CanonicalSkillProfile = field(default_factory=CanonicalSkillProfile)

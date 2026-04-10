@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api import analyze_router, cv_router, debug_router, health_router
-from services import JobDatasetService, get_settings
+from core.dataset import JobDatasetService, get_settings
 
 logger = logging.getLogger(__name__)
 
