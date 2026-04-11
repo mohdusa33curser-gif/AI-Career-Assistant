@@ -31,5 +31,7 @@ export function mapAnalyzeCvToAnalysisResponse(
       api.message && api.extracted_skills.length === 0
         ? "No technical skills detected"
         : base.inferredRole,
+    isValidCv: api.is_valid_cv,
+    confidenceScore: api.confidence_score,
   };
 }

@@ -80,6 +80,88 @@ def normalize_for_skill_matching(text: str) -> str:
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
+# ---------------------------------------------------------------------------
+# CV validation + confidence scoring
+# ---------------------------------------------------------------------------
+
+_CV_SECTION_KEYWORDS: frozenset[str] = frozenset({
+    "experience", "education", "skills", "projects", "work history",
+    "employment", "qualifications", "objective", "summary", "career",
+    "internship", "certification", "achievements", "professional",
+    "responsibilities", "profile", "languages", "portfolio",
+})
+
+_MIN_CV_TEXT_LENGTH = 150
+_MIN_CV_SECTION_HITS = 2
+
+
+def is_valid_cv(text: str) -> tuple[bool, str]:
+    """
+    Lightweight heuristic gate: is this text plausibly a CV?
+
+    Returns (True, "ok") or (False, reason).
+    Does NOT call the AI model — this runs before any matching.
+    """
+    if not text or len(text.strip()) < _MIN_CV_TEXT_LENGTH:
+        return False, "Document is too short to be a CV."
+
+    lower = text.lower()
+    section_hits = sum(1 for kw in _CV_SECTION_KEYWORDS if kw in lower)
+    if section_hits < _MIN_CV_SECTION_HITS:
+        return False, "Document does not appear to contain standard CV sections (experience, education, skills, etc.)."
+
+    return True, "ok"
+
+
+def compute_cv_confidence(text: str, skill_weights: dict[str, int]) -> float:
+    """
+    Estimate how information-rich and CV-like this document is.
+
+    Returns float in [0.0, 1.0].
+
+    Weights:
+      0.45 — skill count  (proxy for technical depth)
+      0.30 — CV structure (section keyword hits)
+      0.15 — text length  (proxy for detail level)
+      0.10 — avg skill weight (proxy for skill depth)
+    """
+    score = 0.0
+
+    # Factor 1: skill count
+    skill_count = len(skill_weights)
+    score += min(skill_count / 20.0, 1.0) * 0.45
+
+    # Factor 2: structure
+    lower = text.lower()
+    section_hits = sum(1 for kw in _CV_SECTION_KEYWORDS if kw in lower)
+    score += min(section_hits / 6.0, 1.0) * 0.30
+
+    # Factor 3: text length
+    score += min(len(text.strip()) / 1500.0, 1.0) * 0.15
+
+    # Factor 4: average skill weight
+    if skill_weights:
+        avg_weight = sum(skill_weights.values()) / len(skill_weights)
+        score += min(avg_weight / 3.0, 1.0) * 0.10
+
+    return round(min(1.0, max(0.0, score)), 4)
+
+
+def _apply_confidence_penalty(score: float, confidence: float) -> float:
+    """
+    Deflate a job's final score based on how weak/unreliable the CV is.
+
+    confidence >= 0.70 → no penalty      (full, realistic score)
+    confidence 0.45–0.70 → 22% reduction (mid-quality CV)
+    confidence < 0.45    → 50% reduction (very weak / non-CV document)
+    """
+    if confidence >= 0.70:
+        return score
+    if confidence >= 0.45:
+        return score * 0.78
+    return score * 0.50
+
+
 def normalize_cv_text_for_skill_extraction(raw: str) -> str:
     """
     Normalize PDF/CV text for vocabulary skill extraction.
@@ -951,6 +1033,7 @@ def analyze_cv_skills(
     cv_text: str | None = None,
     job_embedding_lookup: dict[int, np.ndarray] | None = None,
     sort_by: str = "match",
+    confidence_score: float = 1.0,
 ) -> dict[str, Any]:
     base_user_skill_weights = _build_user_skill_weights(user_skills)
 
@@ -1031,6 +1114,7 @@ def analyze_cv_skills(
             experience_alignment_score=exp_alignment_score,
             salary_score=sal_score,
         )
+        final_score = _apply_confidence_penalty(final_score, confidence_score)
 
         strong_skills, partial_skills, missing_skills = _split_skill_strengths(
             user_skill_weights,

@@ -10,8 +10,10 @@ from core.dataset import load_jobs_from_db, JobDatasetService, get_settings, col
 from core.cv_analysis import (
     analyze_cv_skills,
     clean_cv_text,
+    compute_cv_confidence,
     extract_skills_from_cv_text,
     extract_text_from_pdf_bytes,
+    is_valid_cv,
     prepare_display_extracted_skills,
     vocabulary_sample_for_debug,
     skill_labels_to_weight_map,
@@ -167,7 +169,28 @@ async def post_analyze_cv(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     cleaned = clean_cv_text(pdf_text)
+
+    valid, invalid_reason = is_valid_cv(cleaned)
+    if not valid:
+        logger.info("analyze-cv: rejected as non-CV — %s", invalid_reason)
+        return AnalyzeCVResponse.model_validate({
+            "skills": {},
+            "gaps": [],
+            "top_jobs": [],
+            "extracted_skills": [],
+            "recommendations": [],
+            "career_score": 0.0,
+            "message": invalid_reason,
+            "career_path": None,
+            "next_role": None,
+            "learning_roadmap": [],
+            "insight_summary": None,
+            "is_valid_cv": False,
+            "confidence_score": 0.0,
+        })
+
     extracted_skill_weights = extract_skills_from_cv_text(cleaned, jobs)
+    confidence_score = compute_cv_confidence(cleaned, extracted_skill_weights)
 
     result = analyze_cv_skills(
         extracted_skill_weights,
@@ -176,6 +199,7 @@ async def post_analyze_cv(
         cv_text=cleaned,
         job_embedding_lookup=job_embedding_lookup,
         sort_by=sort_by,
+        confidence_score=confidence_score,
     )
 
     if not extracted_skill_weights:
@@ -206,7 +230,8 @@ async def post_analyze_cv(
         "next_role": result.get("next_role"),
         "learning_roadmap": result.get("learning_roadmap", []),
         "insight_summary": result.get("insight_summary"),
-
+        "is_valid_cv": True,
+        "confidence_score": round(confidence_score, 4),
     }
 
     matched_keys = list(result.get("skills", {}).keys())

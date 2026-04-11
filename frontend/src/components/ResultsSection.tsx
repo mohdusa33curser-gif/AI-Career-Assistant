@@ -210,29 +210,35 @@ function SkillGroup({ title, skills }: { title: string; skills: Skill[] }) {
 
 // ─── Score signal label helpers ───────────────────────────────────────────────
 
-type SignalChip = { label: string; color: string; badge: string };
+type SignalChip = { label: string; color: string; badge: string; icon: string };
 
 function getExperienceLabel(score: number | undefined): SignalChip | null {
   if (score == null) return null;
-  if (score >= 0.9) return { label: "Senior Level",  color: "text-emerald-400", badge: "border-emerald-500/40 bg-emerald-500/[0.12] text-emerald-300 shadow-[0_0_10px_rgba(16,185,129,0.14)]" };
-  if (score >= 0.7) return { label: "Mid-Level",     color: "text-sky-400",     badge: "border-sky-500/40 bg-sky-500/[0.12] text-sky-300 shadow-[0_0_10px_rgba(14,165,233,0.12)]" };
-  if (score >= 0.4) return { label: "Entry Level",   color: "text-amber-400",   badge: "border-amber-500/40 bg-amber-500/[0.12] text-amber-300" };
-  return              { label: "Stretch Role",  color: "text-rose-400",    badge: "border-rose-500/40 bg-rose-500/[0.12] text-rose-300" };
+  // icon: person silhouette (user)
+  const icon = "M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z";
+  if (score >= 0.9) return { label: "Senior Level",  color: "text-emerald-400", badge: "border-emerald-500/50 bg-emerald-500/[0.15] text-emerald-200 shadow-[0_0_12px_rgba(16,185,129,0.20)]", icon };
+  if (score >= 0.7) return { label: "Mid-Level",     color: "text-amber-400",   badge: "border-amber-500/50 bg-amber-500/[0.15] text-amber-200 shadow-[0_0_10px_rgba(245,158,11,0.16)]", icon };
+  if (score >= 0.4) return { label: "Entry Level",   color: "text-rose-400",    badge: "border-rose-500/50 bg-rose-500/[0.15] text-rose-200", icon };
+  return              { label: "Stretch Role",  color: "text-rose-400",    badge: "border-rose-500/50 bg-rose-500/[0.15] text-rose-200", icon };
 }
 
 function getDemandLabel(score: number | undefined): SignalChip | null {
   if (score == null) return null;
-  if (score >= 0.85) return { label: "High Demand",    color: "text-emerald-400", badge: "border-emerald-500/40 bg-emerald-500/[0.12] text-emerald-300 shadow-[0_0_10px_rgba(16,185,129,0.14)]" };
-  if (score >= 0.65) return { label: "Growing Demand", color: "text-sky-400",     badge: "border-sky-500/40 bg-sky-500/[0.12] text-sky-300" };
-  if (score >= 0.4)  return { label: "Stable Market",  color: "text-amber-400",   badge: "border-amber-500/40 bg-amber-500/[0.12] text-amber-300" };
-  return               { label: "Low Demand",    color: "text-rose-400",    badge: "border-rose-500/40 bg-rose-500/[0.12] text-rose-300" };
+  // icon: trending up arrow
+  const icon = "M2.25 18L9 11.25l4.306 4.307a11.95 11.95 0 015.814-5.519l2.74-1.22m0 0l-5.94-2.28m5.94 2.28l-2.28 5.941";
+  if (score >= 0.85) return { label: "High Demand",    color: "text-emerald-400", badge: "border-emerald-500/50 bg-emerald-500/[0.15] text-emerald-200 shadow-[0_0_12px_rgba(16,185,129,0.20)]", icon };
+  if (score >= 0.65) return { label: "Growing Demand", color: "text-sky-400",     badge: "border-sky-500/50 bg-sky-500/[0.15] text-sky-200 shadow-[0_0_10px_rgba(14,165,233,0.16)]", icon };
+  if (score >= 0.4)  return { label: "Stable Market",  color: "text-amber-400",   badge: "border-amber-500/50 bg-amber-500/[0.15] text-amber-200", icon };
+  return               { label: "Low Demand",    color: "text-rose-400",    badge: "border-rose-500/50 bg-rose-500/[0.15] text-rose-200", icon };
 }
 
 function getSalaryLabel(score: number | undefined): SignalChip | null {
   if (score == null) return null;
-  if (score >= 0.7) return { label: "Competitive Salary", color: "text-emerald-400", badge: "border-emerald-500/40 bg-emerald-500/[0.12] text-emerald-300 shadow-[0_0_10px_rgba(16,185,129,0.14)]" };
-  if (score >= 0.4) return { label: "Average Salary",     color: "text-amber-400",   badge: "border-amber-500/40 bg-amber-500/[0.12] text-amber-300" };
-  return              { label: "Below Market",       color: "text-rose-400",    badge: "border-rose-500/40 bg-rose-500/[0.12] text-rose-300" };
+  // icon: currency dollar
+  const icon = "M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 11-18 0 9 9 0 0118 0z";
+  if (score >= 0.7) return { label: "Competitive Salary", color: "text-emerald-400", badge: "border-emerald-500/50 bg-emerald-500/[0.15] text-emerald-200 shadow-[0_0_12px_rgba(16,185,129,0.20)]", icon };
+  if (score >= 0.4) return { label: "Average Salary",     color: "text-amber-400",   badge: "border-amber-500/50 bg-amber-500/[0.15] text-amber-200", icon };
+  return              { label: "Below Market",       color: "text-rose-400",    badge: "border-rose-500/50 bg-rose-500/[0.15] text-rose-200", icon };
 }
 
 // ─── ScoreBox: combined metric card with progress bar ─────────────────────────
@@ -610,12 +616,15 @@ function JobMatchCard({ job, index, onOpenInsight }: { job: JobMatch; index: num
 
       {/* Signal pill badges — primary visual */}
       {signalChips.length > 0 && (
-        <div className="mt-2.5 flex flex-wrap gap-1.5">
+        <div className="mt-3 flex flex-wrap gap-2">
           {signalChips.map((chip) => (
             <span
               key={chip.label}
-              className={`inline-flex rounded-full border px-2.5 py-0.5 text-[10px] font-semibold ${chip.badge}`}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-bold tracking-wide ${chip.badge}`}
             >
+              <svg className="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d={chip.icon} />
+              </svg>
               {chip.label}
             </span>
           ))}
@@ -1485,6 +1494,108 @@ function SortDropdown({ sortBy, onChange }: { sortBy: SortBy; onChange: (v: Sort
   );
 }
 
+function InvalidCVModal({ onRetry }: { message?: string | null; onRetry: () => void }) {
+  return (
+    <motion.div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 p-6 backdrop-blur-md"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.93, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.93, y: 20 }}
+        transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+        className="w-full max-w-lg rounded-[2rem] border border-rose-500/20 bg-[#0d0d14] shadow-[0_40px_100px_rgba(0,0,0,0.7),0_0_0_1px_rgba(239,68,68,0.08)]"
+      >
+        {/* Top graphic band */}
+        <div className="relative flex h-52 items-center justify-center overflow-hidden rounded-t-[2rem] bg-gradient-to-b from-rose-950/60 to-transparent">
+          {/* Glow rings */}
+          <div className="absolute h-64 w-64 rounded-full bg-rose-600/10 blur-3xl" />
+          <div className="absolute h-40 w-40 rounded-full bg-rose-500/10 blur-2xl" />
+
+          {/* Pulsing outer ring */}
+          <motion.div
+            animate={{ scale: [1, 1.12, 1], opacity: [0.15, 0.05, 0.15] }}
+            transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut" }}
+            className="absolute h-48 w-48 rounded-full border border-rose-500/30"
+          />
+          <motion.div
+            animate={{ scale: [1, 1.08, 1], opacity: [0.25, 0.10, 0.25] }}
+            transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut", delay: 0.4 }}
+            className="absolute h-36 w-36 rounded-full border border-rose-500/40"
+          />
+
+          {/* Central icon */}
+          <motion.div
+            initial={{ scale: 0.7, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ delay: 0.15, duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+            className="relative flex h-24 w-24 items-center justify-center rounded-3xl border border-rose-500/40 bg-rose-500/15 shadow-[0_0_40px_rgba(239,68,68,0.25)]"
+          >
+            <svg className="h-12 w-12 text-rose-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+            </svg>
+            {/* X badge */}
+            <div className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full bg-rose-500 shadow-lg">
+              <svg className="h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </div>
+          </motion.div>
+        </div>
+
+        {/* Content */}
+        <div className="px-10 pb-10 pt-6 text-center">
+          <h2 className="text-3xl font-bold text-white">Not a CV</h2>
+          <p className="mt-2.5 text-sm text-slate-400">
+            Upload a document with skills, experience, or education.
+          </p>
+
+          {/* What we need — icon checklist */}
+          <div className="mt-6 flex justify-center gap-6">
+            {[
+              { icon: "M20.25 14.15v4.25c0 1.094-.787 2.036-1.872 2.18-2.087.277-4.216.42-6.378.42s-4.291-.143-6.378-.42c-1.085-.144-1.872-1.086-1.872-2.18v-4.25m16.5 0a2.18 2.18 0 00.75-1.661V8.706c0-1.081-.768-2.015-1.837-2.175a48.114 48.114 0 00-3.413-.387m4.5 8.006c-.194.165-.42.295-.673.38A23.978 23.978 0 0112 15.75c-2.648 0-5.195-.429-7.577-1.22a2.016 2.016 0 01-.673-.38m0 0A2.18 2.18 0 013 12.489V8.706c0-1.081.768-2.015 1.837-2.175a48.111 48.111 0 013.413-.387m7.5 0V5.25A2.25 2.25 0 0013.5 3h-3a2.25 2.25 0 00-2.25 2.25v.894m7.5 0a48.667 48.667 0 00-7.5 0M12 12.75h.008v.008H12v-.008z", label: "Experience" },
+              { icon: "M4.26 10.147a60.436 60.436 0 00-.491 6.347A48.627 48.627 0 0112 20.904a48.627 48.627 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.57 50.57 0 00-2.658-.813A59.905 59.905 0 0112 3.493a59.902 59.902 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.697 50.697 0 0112 13.489a50.702 50.702 0 017.74-3.342M6.75 15a.75.75 0 100-1.5.75.75 0 000 1.5zm0 0v-3.675A55.378 55.378 0 0112 8.443m-7.007 11.55A5.981 5.981 0 006.75 15.75v-1.5", label: "Education" },
+              { icon: "M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 004.486-6.336l-3.276 3.277a3.004 3.004 0 01-2.25-2.25l3.276-3.276a4.5 4.5 0 00-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085m-1.745 1.437L5.909 7.5H4.5L2.25 3.75l1.5-1.5L7.5 4.5v1.409l4.26 4.26m-1.745 1.437l1.745-1.437m6.615 8.206L15.75 15.75M4.867 19.125h.008v.008h-.008v-.008z", label: "Skills" },
+            ].map(({ icon, label }) => (
+              <div key={label} className="flex flex-col items-center gap-2">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04]">
+                  <svg className="h-5 w-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d={icon} />
+                  </svg>
+                </div>
+                <span className="text-[11px] font-medium text-slate-500">{label}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Actions */}
+          <div className="mt-8 flex gap-3">
+            <motion.button
+              type="button"
+              whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+              onClick={onRetry}
+              className="flex-1 rounded-2xl bg-rose-500 py-3.5 text-sm font-bold text-white shadow-[0_8px_24px_rgba(239,68,68,0.30)] transition hover:bg-rose-400"
+            >
+              Try Again
+            </motion.button>
+            <motion.button
+              type="button"
+              whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+              onClick={() => window.location.replace("/")}
+              className="rounded-2xl border border-white/10 bg-white/[0.04] px-6 py-3.5 text-sm font-medium text-slate-400 transition hover:bg-white/[0.08] hover:text-white"
+            >
+              Clear
+            </motion.button>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
 export function ResultsSection({ analysis }: { analysis: AnalysisResponse }) {
   const [selectedJob, setSelectedJob] = useState<JobMatch | null>(null);
   const [visibleCount, setVisibleCount] = useState(4);
@@ -1543,6 +1654,17 @@ export function ResultsSection({ analysis }: { analysis: AnalysisResponse }) {
   function handleSort(next: SortBy) {
     setSortBy(next);
     setVisibleCount(4);
+  }
+
+  if (analysis.isValidCv === false) {
+    return (
+      <AnimatePresence>
+        <InvalidCVModal
+          message={analysis.analysisMessage}
+          onRetry={() => window.location.replace("/")}
+        />
+      </AnimatePresence>
+    );
   }
 
   return (

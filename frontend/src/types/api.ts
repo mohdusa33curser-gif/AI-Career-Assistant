@@ -100,6 +100,9 @@ export interface AnalysisResponse {
   nextRole?: NextRoleInsight | null;
   learningRoadmap: LearningRoadmapItem[];
   insightSummary?: InsightSummary | null;
+
+  isValidCv?: boolean;
+  confidenceScore?: number;
 }
 
 export interface AnalyzeSkillsGapRow {
@@ -202,4 +205,7 @@ export interface AnalyzeCVApiResponse {
   next_role?: AnalyzeSkillsApiResponse["next_role"];
   learning_roadmap?: AnalyzeSkillsApiResponse["learning_roadmap"];
   insight_summary?: AnalyzeSkillsApiResponse["insight_summary"];
+
+  is_valid_cv?: boolean;
+  confidence_score?: number;
 }
